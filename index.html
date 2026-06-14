@@ -231,6 +231,7 @@ function useData(){
   var _d=useState([]),alog=_d[0],setLogRaw=_d[1];
   var _e2=useState(DEPTS),depts=_e2[0],setDepts=_e2[1];
   var _f=useState(""),cusr=_f[0],setCusr=_f[1];
+  var _r=useState("admin"),role=_r[0],setRole=_r[1];
   var _g=useState(false),syncing=_g[0],setSyncing=_g[1];
   var _h=useState(null),syncErr=_h[0],setSyncErr=_h[1];
   var _i=useState(null),lastSync=_i[0],setLastSync=_i[1];
@@ -252,10 +253,11 @@ function useData(){
     setSyncing(false);
   }
 
-  async function connect(userDisplayName){
+  async function connect(userDisplayName, userRole){
     setSyncing(true);setSyncErr(null);
     try{
       if(userDisplayName)setCusr(userDisplayName);
+    if(userRole)setRole(userRole);
       await fetchAll();
       setMode("supabase");
       poll.current=setInterval(fetchAll,15000);
@@ -264,7 +266,7 @@ function useData(){
     }
     setSyncing(false);
   }
-  function disconnect(){setMode("local");clearInterval(poll.current);setCardsRaw(INIT_CARDS);setHistRaw(INIT_HIST);setLogRaw([]);setCusr("");sbSignOut();}
+  function disconnect(){setMode("local");clearInterval(poll.current);setCardsRaw(INIT_CARDS);setHistRaw(INIT_HIST);setLogRaw([]);setCusr("");setRole("admin");sbSignOut();}
   useEffect(function(){return function(){clearInterval(poll.current);};},[]);
 
   function addLog(action,cardId,detail){
@@ -331,7 +333,7 @@ function useData(){
     }
   }
 
-  return{mode,cards,setCards,hist,setHist,alog,depts,setDepts,cusr,setCusr,syncing,syncErr,lastSync,connect,disconnect,refresh:fetchAll,addLog};
+  return{mode,cards,setCards,hist,setHist,alog,depts,setDepts,cusr,setCusr,role,syncing,syncErr,lastSync,connect,disconnect,refresh:fetchAll,addLog};
 }
 
 // ── UI ATOMS ───────────────────────────────────────────────────────────────────
@@ -541,9 +543,10 @@ function AssignReturn(p){
   function doReturn(reason,ad){setSaving(true);var t=today(),days=daysB(ad||rtgt.ad,t);var he={id:Date.now(),cardId:rtgt.id,empId:rtgt.empId,holder:rtgt.holder,dept:rtgt.dept,ad:ad||rtgt.ad,rd:t,reason:reason,days:days,undone:false,spId:null};p.setHist(function(h){return[...h,he];});p.setCards(function(cs){return cs.map(function(c){return c.id===rtgt.id?Object.assign({},c,{status:"available",empId:null,holder:null,dept:null,ad:null}):c;});});p.addLog("return",rtgt.id,"Returned by "+rtgt.holder+" — "+reason);setRtgt(null);setSaving(false);}
   function doUndo(){var en=utgt;p.setCards(function(cs){return cs.map(function(c){return c.id===en.cardId?Object.assign({},c,{status:"active",empId:en.empId,holder:en.holder,dept:en.dept,ad:en.ad}):c;});});p.setHist(function(hs){return hs.map(function(h){return h.id===en.id?Object.assign({},h,{undone:true}):h;});});p.addLog("undo-return",en.cardId,"Undo return for "+en.holder);setUtgt(null);}
   function doEditDept(){if(!edv.trim())return;setSaving(true);p.setCards(function(cs){return cs.map(function(c){return c.id===etgt.id?Object.assign({},c,{dept:edv}):c;});});p.addLog("dept-change",etgt.id,"Dept: "+etgt.dept+" → "+edv);setEtgt(null);setEdv("");setSaving(false);}
+  var isHrga=p.role==="hrga";
   return e("div",{className:"fi"},
-    e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18,marginBottom:18}},
-      e("div",{style:Object.assign({},SRF,{padding:20})},
+    e("div",{style:{display:"grid",gridTemplateColumns:isHrga?"1fr":"1fr 1fr",gap:18,marginBottom:18}},
+      !isHrga&&e("div",{style:Object.assign({},SRF,{padding:20})},
         e("h3",{style:{margin:"0 0 14px",fontSize:14,fontWeight:700}},"➕ Assign Card"),
         e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}},
           e("div",{style:{gridColumn:"1 / -1"}},e("label",{style:{display:"block",fontSize:13,fontWeight:600,color:"#374151",marginBottom:4}},"Select Available Card *"),
@@ -557,7 +560,7 @@ function AssignReturn(p){
         ),
         e("div",{style:{marginTop:4,display:"flex",justifyContent:"flex-end"}},e(Btn,{variant:"success",loading:saving,disabled:!assignCard,onClick:doAssign},"✓ Assign Card"))
       ),
-      e("div",{style:Object.assign({},SRF,{padding:20})},
+      !isHrga&&e("div",{style:Object.assign({},SRF,{padding:20})},
         e("h3",{style:{margin:"0 0 12px",fontSize:14,fontWeight:700}},"↺ Undo Incorrect Return"),
         e("p",{style:{fontSize:12,color:"#64748b",marginBottom:12}},"Reverse a card that was returned by mistake."),
         recent.length===0?e("p",{style:{fontSize:13,color:"#94a3b8"}},"No recent returns"):
@@ -578,9 +581,9 @@ function AssignReturn(p){
             e("td",{style:{fontFamily:"monospace",fontSize:11,color:"#059669"}},(c.tc||"—").slice(0,6)+"…"),
             e("td",{style:{fontFamily:"monospace",fontSize:12,color:"#7c3aed",fontWeight:600}},c.empId),
             e("td",{style:{fontWeight:500}},c.holder),
-            e("td",null,etgt&&etgt.id===c.id?
+            e("td",null,!isHrga&&etgt&&etgt.id===c.id?
               e("div",{style:{display:"flex",gap:6,alignItems:"center"}},e("select",{value:edv,onChange:function(ev){setEdv(ev.target.value);},style:{padding:"4px 7px",border:"1.5px solid #2563eb",borderRadius:6,fontSize:13,background:"#fff",fontFamily:"inherit"}},p.depts.map(function(d){return e("option",{key:d},d);})),e(Btn,{size:"sm",variant:"success",loading:saving,onClick:doEditDept},"✓"),e(Btn,{size:"sm",variant:"ghost",onClick:function(){setEtgt(null);}},"✕")):
-              e("span",{style:{display:"inline-flex",alignItems:"center",gap:5}},e("span",{style:{color:"#64748b"}},c.dept),e("button",{onClick:function(){setEtgt(c);setEdv(c.dept);},style:{border:"none",background:"none",cursor:"pointer",fontSize:12,color:"#94a3b8",padding:0}},"✏"))
+              e("span",{style:{display:"inline-flex",alignItems:"center",gap:5}},e("span",{style:{color:"#64748b"}},c.dept),!isHrga&&e("button",{onClick:function(){setEtgt(c);setEdv(c.dept);},style:{border:"none",background:"none",cursor:"pointer",fontSize:12,color:"#94a3b8",padding:0}},"✏"))
             ),
             e("td",{style:{color:"#64748b",whiteSpace:"nowrap"}},fmtD(c.ad)),
             e("td",null,e("span",{style:{background:"#f0fdf4",color:"#16a34a",fontWeight:700,padding:"3px 10px",borderRadius:20,fontSize:12}},daysB(c.ad)+"d")),
@@ -781,7 +784,7 @@ function App(){
     sbGetSession().then(function(session){
       if(session&&session.user){
         document.getElementById("login-screen").classList.add("hidden");
-        d.connect(session.user.email||"User");
+        d.connect(session.user.email||"User", (session.user.user_metadata&&session.user.user_metadata.role)||"admin");
       }
     }).catch(function(){});
 
@@ -808,7 +811,7 @@ function App(){
         statusEl.textContent="";
       } else {
         document.getElementById("login-screen").classList.add("hidden");
-        d.connect(result.data.user.email||"User");
+        d.connect(result.data.user.email||"User", (result.data.user.user_metadata&&result.data.user.user_metadata.role)||"admin");
       }
     });
 
@@ -818,19 +821,21 @@ function App(){
     });
   },[]);
 
-  var TABS=[
-    {k:"dashboard",icon:"📊",label:"Dashboard"},
-    {k:"cards",icon:"🪪",label:"All Cards"},
-    {k:"assign",icon:"👤",label:"Assign / Return"},
-    {k:"history",icon:"📅",label:"Return History"},
-    {k:"log",icon:"🔍",label:"Audit Log"},
-    {k:"import",icon:"📥",label:"Import Excel"},
-    {k:"export",icon:"📤",label:"Export Excel"},
-    {k:"settings",icon:"⚙",label:"Departments"}
+  var ALL_TABS=[
+    {k:"dashboard",icon:"📊",label:"Dashboard",roles:["admin"]},
+    {k:"cards",icon:"🪪",label:"All Cards",roles:["admin"]},
+    {k:"assign",icon:"👤",label:"Assign / Return",roles:["admin"],label_hrga:"↩ Return Card"},
+    {k:"assign",icon:"↩",label:"Return Card",roles:["hrga"]},
+    {k:"history",icon:"📅",label:"Return History",roles:["admin","hrga"]},
+    {k:"log",icon:"🔍",label:"Audit Log",roles:["admin"]},
+    {k:"import",icon:"📥",label:"Import Excel",roles:["admin"]},
+    {k:"export",icon:"📤",label:"Export Excel",roles:["admin","hrga"]},
+    {k:"settings",icon:"⚙",label:"Departments",roles:["admin"]}
   ];
+  var TABS=ALL_TABS.filter(function(t){return t.roles.indexOf(d.role)!==-1;});
 
   var tabContent=null;
-  var dp={cards:d.cards,hist:d.hist,alog:d.alog,depts:d.depts,setCards:d.setCards,setHist:d.setHist,setDepts:d.setDepts,addLog:d.addLog};
+  var dp={cards:d.cards,hist:d.hist,alog:d.alog,depts:d.depts,setCards:d.setCards,setHist:d.setHist,setDepts:d.setDepts,addLog:d.addLog,role:d.role};
   if(tab==="dashboard") tabContent=e(Dashboard,dp);
   else if(tab==="cards") tabContent=e(AllCards,Object.assign({},dp,{openAssign:function(c){setPresel(c);setTab("assign");}}));
   else if(tab==="assign") tabContent=e(AssignReturn,Object.assign({},dp,{preselect:presel,clearPreselect:function(){setPresel(null);}}));
@@ -853,13 +858,16 @@ function App(){
       e("div",{style:{flex:1}}),
       e(SyncBadge,{mode:d.mode,error:d.syncErr,syncing:d.syncing,lastSync:d.lastSync}),
       d.mode==="supabase"&&e("div",{style:{display:"flex",alignItems:"center",gap:10}},
-        e("span",{style:{fontSize:12,color:"#64748b"}},d.cusr),
+        e("div",{style:{display:"flex",flexDirection:"column",alignItems:"flex-end"}},
+          e("span",{style:{fontSize:12,color:"#64748b"}},d.cusr),
+          e("span",{style:{fontSize:10,background:d.role==="hrga"?"#f0fdf4":"#eff6ff",color:d.role==="hrga"?"#16a34a":"#2563eb",borderRadius:4,padding:"1px 6px",fontWeight:600}},d.role==="hrga"?"HR GA":"HR Admin")
+        ),
         e(Btn,{size:"sm",variant:"ghost",onClick:function(){d.disconnect();document.getElementById("login-screen").classList.remove("hidden");}},"Sign out")
       )
     ),
     // Nav
     e("div",{style:{background:"#fff",borderBottom:"1px solid #e2e8f0",padding:"0 24px",display:"flex",gap:2,overflowX:"auto"}},
-      TABS.map(function(t){var active=tab===t.k;return e("button",{key:t.k,onClick:function(){setTab(t.k);if(t.k!=="assign")setPresel(null);},style:{padding:"12px 14px",border:"none",borderBottom:"2px solid "+(active?"#2563eb":"transparent"),background:"none",cursor:"pointer",fontSize:13,fontWeight:active?700:500,color:active?"#2563eb":"#64748b",display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap",transition:"color .15s"}},t.icon," ",t.label);})
+      TABS.map(function(t,ti){var active=tab===t.k;return e("button",{key:t.k+"_"+ti,onClick:function(){setTab(t.k);if(t.k!=="assign")setPresel(null);},style:{padding:"12px 14px",border:"none",borderBottom:"2px solid "+(active?"#2563eb":"transparent"),background:"none",cursor:"pointer",fontSize:13,fontWeight:active?700:500,color:active?"#2563eb":"#64748b",display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap",transition:"color .15s"}},t.icon," ",t.label);})
     ),
     // Content
     e("div",{style:{flex:1,padding:"22px 24px",maxWidth:1400,width:"100%",margin:"0 auto",boxSizing:"border-box"}},
