@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Access Card Management — HR Automation</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<!-- Supabase -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<!-- React -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<!-- XLSX -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter','Segoe UI',sans-serif;background:#f1f5f9;min-height:100vh}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
+.dz{border:2px dashed #cbd5e1;border-radius:12px;padding:36px 24px;text-align:center;transition:all .2s;cursor:pointer;background:#fafafa}
+.dz:hover,.dz.drag{border-color:#2563eb;background:#eff6ff}
+.dz input{display:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin{animation:spin 1s linear infinite;display:inline-block}
+@keyframes fi{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.fi{animation:fi .2s ease}
+th{text-align:left;white-space:nowrap;font-size:12px;font-weight:700;color:#374151;padding:10px 12px}
+td{padding:9px 12px}
+/* Login screen */
+#login-screen{position:fixed;inset:0;background:#0f172a;display:flex;align-items:center;justify-content:center;z-index:9999;flex-direction:column;gap:20px}
+#login-screen.hidden{display:none}
+.login-input{width:100%;padding:11px 14px;border-radius:10px;border:1.5px solid #334155;background:#1e293b;color:#f1f5f9;font-size:14px;outline:none;font-family:inherit;transition:border-color .2s}
+.login-input:focus{border-color:#3b82f6}
+.login-input::placeholder{color:#64748b}
+</style>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div id="login-screen">
+  <div style="text-align:center;color:#fff;width:100%;max-width:360px;padding:0 20px">
+    <div style="width:56px;height:56px;background:#2563eb;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 16px">🪪</div>
+    <h1 style="font-size:22px;font-weight:700;margin-bottom:6px">Access Card Management</h1>
+    <p style="color:#94a3b8;font-size:14px;margin-bottom:28px">HR Automation — Sirisoft</p>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <input id="inp-email" class="login-input" type="email" placeholder="Email address" autocomplete="email"/>
+      <input id="inp-password" class="login-input" type="password" placeholder="Password" autocomplete="current-password"/>
+    </div>
+    <button id="btn-login" style="background:#2563eb;color:#fff;border:none;border-radius:10px;padding:13px 32px;font-size:15px;font-weight:600;cursor:pointer;width:100%">
+      Sign In
+    </button>
+    <p id="login-err" style="color:#f87171;font-size:13px;margin-top:14px;display:none"></p>
+    <p id="login-status" style="color:#94a3b8;font-size:13px;margin-top:10px"></p>
+  </div>
+</div>
+
+<div id="root"></div>
+
+<script>
+(function(){
+"use strict";
+
+// ── SUPABASE CONFIG ────────────────────────────────────────────────────────────
+// ⚠ แก้ค่านี้ตาม Supabase Project ของคุณ
+// Settings → API → Project URL และ anon public key
+var SUPABASE_CONFIG = {
+  url:     "https://djqknvrbcgttzgpuwwei.supabase.co",
+  anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRqcWtudnJiY2d0dHpncHV3d2VpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE0MTYyNDksImV4cCI6MjA5Njk5MjI0OX0.dnx_YeB6la20ULTu7svG6D0CICwXhgaVl990a62X7Ks"
+};
+
+var _db = null;  // Supabase client instance
+
+function initSupabase(){
+  if(SUPABASE_CONFIG.url === "YOUR_SUPABASE_URL"){
+    return false; // Demo mode
+  }
+  try{
+    _db = supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
+    return true;
+  }catch(e){
+    console.error("Supabase init failed:", e);
+    return false;
+  }
+}
+
+// ── SUPABASE AUTH ──────────────────────────────────────────────────────────────
+async function sbLogin(email, password){
+  var result = await _db.auth.signInWithPassword({ email: email, password: password });
+  return result;
+}
+
+async function sbGetSession(){
+  var r = await _db.auth.getSession();
+  return r.data ? r.data.session : null;
+}
+
+async function sbSignOut(){
+  if(_db) await _db.auth.signOut();
+}
+
+// ── SUPABASE DATA FUNCTIONS ────────────────────────────────────────────────────
+async function sbGetAll(tableName){
+  var r = await _db.from(tableName).select("*").order("id");
+  if(r.error) throw new Error(r.error.message);
+  return r.data || [];
+}
+
+async function sbInsert(tableName, fields){
+  var r = await _db.from(tableName).insert(fields).select().single();
+  if(r.error) throw new Error(r.error.message);
+  return r.data;
+}
+
+async function sbUpdate(tableName, id, fields){
+  var r = await _db.from(tableName).update(fields).eq("id", id).select().single();
+  if(r.error) throw new Error(r.error.message);
+  return r.data;
+}
+
+// ── FIELD MAPPERS ──────────────────────────────────────────────────────────────
+function f2card(row){
+  return{
+    id:     row.card_id||"",
+    tc:     row.time_code||"",
+    status: row.status||"available",
+    empId:  row.emp_id||null,
+    holder: row.holder||null,
+    dept:   row.department||null,
+    ad:     row.assigned_date||null,
+    notes:  row.notes||"",
+    spId:   row.id||null
+  };
+}
+function card2f(c){
+  return{
+    card_id:       c.id,
+    time_code:     c.tc||"",
+    status:        c.status,
+    emp_id:        c.empId||null,
+    holder:        c.holder||null,
+    department:    c.dept||null,
+    assigned_date: c.ad||null,
+    notes:         c.notes||""
+  };
+}
+function f2hist(row){
+  return{
+    id:     row.id||Date.now(),
+    cardId: row.card_id||"",
+    empId:  row.emp_id||null,
+    holder: row.holder||"",
+    dept:   row.department||"",
+    ad:     row.assigned_date||null,
+    rd:     row.return_date||null,
+    reason: row.reason||"",
+    days:   row.days||0,
+    undone: !!(row.undone),
+    spId:   row.id||null
+  };
+}
+function hist2f(h){
+  return{
+    card_id:       h.cardId,
+    emp_id:        h.empId||null,
+    holder:        h.holder||null,
+    department:    h.dept||null,
+    assigned_date: h.ad||null,
+    return_date:   h.rd||null,
+    reason:        h.reason||null,
+    days:          h.days||0,
+    undone:        h.undone?true:false
+  };
+}
+function f2log(row){
+  return{ id:row.id, ts:row.timestamp||"", user:row.user_name||"", action:row.action||"", cardId:row.card_id||"", detail:row.detail||"", spId:row.id };
+}
+function log2f(l){
+  return{ timestamp:l.ts, user_name:l.user, action:l.action, card_id:l.cardId, detail:l.detail };
+}
+
+// ── SEED DATA ──────────────────────────────────────────────────────────────────
+var DEPTS=["IT","HR","Finance","Operations","Legal","Marketing","Facilities","Executive"];
+var INIT_CARDS=[
+  {id:"AC-001",tc:"0001234567",status:"active",  empId:"EMP-001",holder:"James Smith",   dept:"IT",        ad:"2024-01-15",notes:"",spId:null},
+  {id:"AC-002",tc:"0002345678",status:"active",  empId:"EMP-002",holder:"Lisa Johnson",  dept:"HR",        ad:"2024-02-20",notes:"",spId:null},
+  {id:"AC-003",tc:"0003456789",status:"active",  empId:"EMP-003",holder:"Mark Williams", dept:"Finance",   ad:"2024-03-10",notes:"",spId:null},
+  {id:"AC-004",tc:"0004567890",status:"lost",    empId:null,     holder:null,            dept:null,        ad:null,         notes:"Lost 01-Apr-2024",spId:null},
+  {id:"AC-005",tc:"0005678901",status:"available",empId:null,   holder:null,            dept:null,        ad:null,         notes:"",spId:null},
+  {id:"AC-006",tc:"0006789012",status:"active",  empId:"EMP-006",holder:"Nancy Brown",  dept:"Operations",ad:"2024-01-28",notes:"",spId:null},
+  {id:"AC-007",tc:"0007890123",status:"damaged", empId:null,     holder:null,            dept:null,        ad:null,         notes:"Chip damaged",spId:null},
+  {id:"AC-008",tc:"0008901234",status:"available",empId:null,   holder:null,            dept:null,        ad:null,         notes:"",spId:null},
+  {id:"AC-009",tc:"0009012345",status:"active",  empId:"EMP-009",holder:"Kevin Davis",  dept:"Legal",     ad:"2024-02-14",notes:"",spId:null},
+  {id:"AC-010",tc:"0000123456",status:"active",  empId:"EMP-010",holder:"Mary Wilson",  dept:"Marketing", ad:"2024-03-22",notes:"",spId:null},
+  {id:"AC-011",tc:"0001122334",status:"available",empId:null,   holder:null,            dept:null,        ad:null,         notes:"",spId:null},
+  {id:"AC-012",tc:"0002233445",status:"active",  empId:"EMP-012",holder:"Peter Taylor", dept:"IT",        ad:"2024-04-05",notes:"",spId:null}
+];
+var INIT_HIST=[
+  {id:1,cardId:"AC-001",empId:"EMP-OLD1",holder:"Old Employee 1",dept:"Finance",   ad:"2023-05-01",rd:"2024-01-14",reason:"Resigned",   days:258,undone:false,spId:null},
+  {id:2,cardId:"AC-003",empId:"EMP-OLD2",holder:"Old Employee 2",dept:"IT",        ad:"2023-08-15",rd:"2024-03-09",reason:"Transferred",days:207,undone:false,spId:null},
+  {id:3,cardId:"AC-006",empId:"EMP-OLD3",holder:"Old Employee 3",dept:"HR",        ad:"2023-11-01",rd:"2024-01-27",reason:"Transferred",days:87, undone:false,spId:null},
+  {id:4,cardId:"AC-009",empId:"EMP-OLD4",holder:"Old Employee 4",dept:"Operations",ad:"2023-12-01",rd:"2024-02-13",reason:"Resigned",   days:74, undone:false,spId:null}
+];
+
+// ── HELPERS ────────────────────────────────────────────────────────────────────
+var MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+var SC={active:{label:"Active",color:"#10b981",bg:"#ecfdf5",icon:"●"},available:{label:"Available",color:"#3b82f6",bg:"#eff6ff",icon:"○"},lost:{label:"Lost",color:"#ef4444",bg:"#fef2f2",icon:"✕"},damaged:{label:"Damaged",color:"#f59e0b",bg:"#fffbeb",icon:"⚠"}};
+var ALBL={assign:"Assigned",return:"Returned","undo-return":"Undo Return",edit:"Edited",add:"Added","dept-change":"Dept Changed",import:"Imported"};
+var ACLR={assign:"#10b981",return:"#ef4444","undo-return":"#f59e0b",edit:"#6366f1",add:"#3b82f6","dept-change":"#7c3aed",import:"#0891b2"};
+var SRF={background:"#fff",borderRadius:12,boxShadow:"0 1px 3px rgba(0,0,0,.08)",border:"1px solid #f1f5f9"};
+
+function fmtD(iso){if(!iso)return"—";var d=new Date(iso+"T00:00:00");return String(d.getDate()).padStart(2,"0")+"-"+MONTHS[d.getMonth()]+"-"+d.getFullYear();}
+function today(){return new Date().toISOString().split("T")[0];}
+function daysB(d1,d2){var base=d2?new Date(d2+"T00:00:00"):new Date();return Math.floor((base-new Date(d1+"T00:00:00"))/86400000);}
+function nowTs(){var d=new Date();return String(d.getDate()).padStart(2,"0")+"-"+MONTHS[d.getMonth()]+"-"+d.getFullYear()+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")+":"+String(d.getSeconds()).padStart(2,"0");}
+function genTC(id){var h=0;for(var i=0;i<id.length;i++){h=((h<<5)-h+id.charCodeAt(i))|0;}return String(Math.abs(h)%10000000000).padStart(10,"0");}
+function normStatus(v){if(!v)return"available";var s=String(v).toLowerCase();if(s.indexOf("active")>=0)return"active";if(s.indexOf("lost")>=0)return"lost";if(s.indexOf("dam")>=0||s.indexOf("broke")>=0)return"damaged";return"available";}
+function parseXlDate(v){if(!v)return null;if(typeof v==="number"){var d=new Date(Math.round((v-25569)*86400*1000));return d.toISOString().split("T")[0];}var s=String(v).trim();if(/^\d{4}-\d{2}-\d{2}$/.test(s))return s;var d2=new Date(s);return isNaN(d2)?null:d2.toISOString().split("T")[0];}
+
+// ── React shortcuts ────────────────────────────────────────────────────────────
+var e=React.createElement;
+var useState=React.useState;
+var useMemo=React.useMemo;
+var useRef=React.useRef;
+var useEffect=React.useEffect;
+
+// ── DATA HOOK ──────────────────────────────────────────────────────────────────
+function useData(){
+  var _a=useState("local"),mode=_a[0],setMode=_a[1];
+  var _b=useState(INIT_CARDS),cards=_b[0],setCardsRaw=_b[1];
+  var _c=useState(INIT_HIST),hist=_c[0],setHistRaw=_c[1];
+  var _d=useState([]),alog=_d[0],setLogRaw=_d[1];
+  var _e2=useState(DEPTS),depts=_e2[0],setDepts=_e2[1];
+  var _f=useState(""),cusr=_f[0],setCusr=_f[1];
+  var _g=useState(false),syncing=_g[0],setSyncing=_g[1];
+  var _h=useState(null),syncErr=_h[0],setSyncErr=_h[1];
+  var _i=useState(null),lastSync=_i[0],setLastSync=_i[1];
+  var poll=useRef(null);
+
+  async function fetchAll(){
+    setSyncing(true);setSyncErr(null);
+    try{
+      var res=await Promise.all([
+        sbGetAll("access_cards"),
+        sbGetAll("access_card_history"),
+        sbGetAll("access_card_log")
+      ]);
+      setCardsRaw(res[0].map(f2card));
+      setHistRaw(res[1].map(f2hist));
+      setLogRaw(res[2].map(f2log).sort(function(a,b){return(b.spId||0)-(a.spId||0);}));
+      var d=new Date();setLastSync(String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"));
+    }catch(err){setSyncErr(String(err.message).slice(0,80));}
+    setSyncing(false);
+  }
+
+  async function connect(userDisplayName){
+    setSyncing(true);setSyncErr(null);
+    try{
+      if(userDisplayName)setCusr(userDisplayName);
+      await fetchAll();
+      setMode("supabase");
+      poll.current=setInterval(fetchAll,15000);
+    }catch(err){
+      setSyncErr(String(err.message).slice(0,80));
+    }
+    setSyncing(false);
+  }
+  function disconnect(){setMode("local");clearInterval(poll.current);setCardsRaw(INIT_CARDS);setHistRaw(INIT_HIST);setLogRaw([]);setCusr("");sbSignOut();}
+  useEffect(function(){return function(){clearInterval(poll.current);};},[]);
+
+  function addLog(action,cardId,detail){
+    var entry={id:Date.now(),ts:nowTs(),user:cusr||"User",action:action,cardId:cardId,detail:detail,spId:null};
+    setLogRaw(function(p){return[entry,...p];});
+    if(mode==="supabase"){
+      sbInsert("access_card_log",log2f(entry)).then(function(res){
+        if(res&&res.id){
+          setLogRaw(function(p){return p.map(function(l){return l.id===entry.id?Object.assign({},l,{spId:res.id}):l;});});
+        }
+      }).catch(function(){});
+    }
+  }
+
+  function setCards(upd){
+    setCardsRaw(function(prev){
+      var next=typeof upd==="function"?upd(prev):upd;
+      if(mode==="supabase")syncCards(prev,next);
+      return next;
+    });
+  }
+  function setHist(upd){
+    setHistRaw(function(prev){
+      var next=typeof upd==="function"?upd(prev):upd;
+      if(mode==="supabase")syncHist(prev,next);
+      return next;
+    });
+  }
+
+  async function syncCards(old,nw){
+    var om={};old.forEach(function(c){om[c.id]=c;});
+    for(var i=0;i<nw.length;i++){
+      var c=nw[i];
+      try{
+        if(c.spId&&om[c.id]&&JSON.stringify(om[c.id])!==JSON.stringify(c)){
+          await sbUpdate("access_cards",c.spId,card2f(c));
+        } else if(!c.spId&&!om[c.id]){
+          var res=await sbInsert("access_cards",card2f(c));
+          if(res&&res.id){
+            (function(cid,sid){setCardsRaw(function(cs){return cs.map(function(x){return x.id===cid?Object.assign({},x,{spId:sid}):x;});});})(c.id,res.id);
+          }
+        }
+      }catch(err){console.error("syncCards",err);}
+    }
+  }
+  async function syncHist(old,nw){
+    var oids={};old.forEach(function(h){oids[h.id]=h;});
+    for(var i=0;i<nw.length;i++){
+      var h=nw[i];
+      try{
+        if(oids[h.id]){
+          // Existing record — sync if changed (e.g. undone flag)
+          if(h.spId&&JSON.stringify(oids[h.id])!==JSON.stringify(h)){
+            await sbUpdate("access_card_history",h.spId,hist2f(h));
+          }
+        } else if(!h.spId){
+          // New record
+          var res=await sbInsert("access_card_history",hist2f(h));
+          if(res&&res.id){
+            (function(hid,sid){setHistRaw(function(hs){return hs.map(function(x){return x.id===hid?Object.assign({},x,{spId:sid}):x;});});})(h.id,res.id);
+          }
+        }
+      }catch(err){console.error("syncHist",err);}
+    }
+  }
+
+  return{mode,cards,setCards,hist,setHist,alog,depts,setDepts,cusr,setCusr,syncing,syncErr,lastSync,connect,disconnect,refresh:fetchAll,addLog};
+}
+
+// ── UI ATOMS ───────────────────────────────────────────────────────────────────
+function Badge(p){var c=SC[p.status]||SC.available;return e("span",{style:{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:600,color:c.color,background:c.bg,border:"1px solid "+c.color+"30"}},e("span",{style:{fontSize:8}},c.icon),c.label);}
+function StatCard(p){return e("div",{style:Object.assign({},SRF,{padding:"16px 20px",display:"flex",alignItems:"center",gap:14,minWidth:0})},e("div",{style:{width:44,height:44,borderRadius:11,background:p.color+"1a",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}},p.icon),e("div",null,e("div",{style:{fontSize:24,fontWeight:700,color:"#0f172a",lineHeight:1.1}},p.value),e("div",{style:{fontSize:12,color:"#64748b",marginTop:2}},p.label)));}
+function Modal(p){return e("div",{style:{position:"fixed",inset:0,background:"rgba(15,23,42,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999},onClick:p.onClose},e("div",{style:{background:"#fff",borderRadius:16,padding:26,width:p.xw?900:p.wide?680:480,maxWidth:"96vw",maxHeight:"92vh",overflow:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.25)"},onClick:function(ev){ev.stopPropagation();}},e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}},e("h3",{style:{margin:0,fontSize:17,fontWeight:700,color:"#0f172a"}},p.title),e("button",{onClick:p.onClose,style:{border:"none",background:"#f1f5f9",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:15,color:"#64748b"}},"✕")),p.children));}
+function FIn(p){var label=p.label,req=p.required,hint=p.hint;var rest=Object.assign({},p);["label","required","hint"].forEach(function(k){delete rest[k];});return e("div",{style:{marginBottom:13}},label&&e("label",{style:{display:"block",fontSize:13,fontWeight:600,color:"#374151",marginBottom:4}},label,req&&e("span",{style:{color:"#ef4444",marginLeft:3}},"*")),e("input",Object.assign({style:{width:"100%",padding:"8px 11px",border:"1.5px solid #e2e8f0",borderRadius:8,fontSize:14,outline:"none",boxSizing:"border-box",fontFamily:"inherit"},onFocus:function(ev){ev.target.style.borderColor="#2563eb";},onBlur:function(ev){ev.target.style.borderColor="#e2e8f0";}},rest)),hint&&e("div",{style:{fontSize:11,color:"#94a3b8",marginTop:3}},hint));}
+function FSel(p){var label=p.label,req=p.required,children=p.children;var rest=Object.assign({},p);["label","required","children"].forEach(function(k){delete rest[k];});return e("div",{style:{marginBottom:13}},label&&e("label",{style:{display:"block",fontSize:13,fontWeight:600,color:"#374151",marginBottom:4}},label,req&&e("span",{style:{color:"#ef4444",marginLeft:3}},"*")),e("select",Object.assign({style:{width:"100%",padding:"8px 11px",border:"1.5px solid #e2e8f0",borderRadius:8,fontSize:14,outline:"none",boxSizing:"border-box",background:"#fff",fontFamily:"inherit"}},rest),children));}
+function Btn(p){var vr=p.variant||"primary",sz=p.size||"md",dis=p.disabled,ld=p.loading,ch=p.children;var rest=Object.assign({},p);["variant","size","disabled","loading","children"].forEach(function(k){delete rest[k];});var sizes={sm:{padding:"5px 10px",fontSize:12},md:{padding:"8px 16px",fontSize:14},lg:{padding:"11px 22px",fontSize:15}};var vrs={primary:{background:"#2563eb",color:"#fff"},success:{background:"#10b981",color:"#fff"},danger:{background:"#ef4444",color:"#fff"},ghost:{background:"#f1f5f9",color:"#374151"},outline:{background:"#fff",color:"#2563eb",border:"1.5px solid #2563eb"},warn:{background:"#f59e0b",color:"#fff"}};return e("button",Object.assign({style:Object.assign({border:"none",borderRadius:8,cursor:(dis||ld)?"not-allowed":"pointer",fontWeight:600,transition:"opacity .15s",display:"inline-flex",alignItems:"center",gap:5,opacity:(dis||ld)?0.5:1,fontFamily:"inherit"},sizes[sz],vrs[vr]),disabled:dis||ld},rest),ld&&e("span",{className:"spin",style:{fontSize:12}},"⟳"),ch);}
+function SyncBadge(p){
+  if(p.mode==="local")return e("span",{style:{fontSize:11,color:"#f59e0b",background:"#fffbeb",padding:"3px 10px",borderRadius:12,border:"1px solid #fde68a"}},"⚠ Demo Mode");
+  if(p.error)return e("span",{style:{fontSize:11,color:"#ef4444",background:"#fef2f2",padding:"3px 10px",borderRadius:12,border:"1px solid #fecaca"}},"✕ "+p.error);
+  if(p.syncing)return e("span",{style:{fontSize:11,color:"#3b82f6",background:"#eff6ff",padding:"3px 10px",borderRadius:12}},e("span",{className:"spin"},"⟳")," Syncing...");
+  return e("span",{style:{fontSize:11,color:"#10b981",background:"#f0fdf4",padding:"3px 10px",borderRadius:12,border:"1px solid #bbf7d0"}},"● Live"+(p.lastSync?" · "+p.lastSync:""));
+}
+
+// ── RETURN MODAL ───────────────────────────────────────────────────────────────
+function ReturnModal(p){
+  var _a=useState(p.card.ad||""),ad=_a[0],setAd=_a[1];
+  var _b=useState(""),reason=_b[0],setReason=_b[1];
+  return e(Modal,{title:"↩ Return Card",onClose:p.onClose},
+    e("div",{style:{background:"#f8fafc",borderRadius:8,padding:"10px 14px",marginBottom:14,fontSize:13,lineHeight:1.9}},
+      e("div",null,e("span",{style:{color:"#64748b"}},"Card: "),e("b",{style:{color:"#2563eb",fontFamily:"monospace"}},p.card.id),e("span",{style:{marginLeft:12,fontSize:11,fontFamily:"monospace",color:"#059669"}},"TC: "+p.card.tc)),
+      e("div",null,e("span",{style:{color:"#64748b"}},"Emp ID: "),e("b",{style:{color:"#7c3aed",fontFamily:"monospace"}},p.card.empId)),
+      e("div",null,e("span",{style:{color:"#64748b"}},"Name: "),e("b",null,p.card.holder)),
+      e("div",null,e("span",{style:{color:"#64748b"}},"Dept: "),e("b",null,p.card.dept))
+    ),
+    e(FIn,{label:"Assigned Date (verify)",type:"date",value:ad,hint:"Correct if needed",onChange:function(ev){setAd(ev.target.value);}}),
+    e(FIn,{label:"Reason for Return",required:true,placeholder:"e.g. Resigned / Transferred",value:reason,onChange:function(ev){setReason(ev.target.value);}}),
+    e("div",{style:{display:"flex",gap:10,justifyContent:"flex-end"}},
+      e(Btn,{variant:"ghost",onClick:p.onClose},"Cancel"),
+      e(Btn,{variant:"danger",disabled:!reason.trim(),onClick:function(){p.onConfirm(reason,ad);}},"✓ Confirm Return")
+    )
+  );
+}
+function UndoModal(p){
+  return e(Modal,{title:"↺ Undo Return",onClose:p.onClose},
+    e("div",{style:{background:"#fefce8",border:"1px solid #fde68a",borderRadius:8,padding:"12px 14px",marginBottom:14,fontSize:13,lineHeight:1.9}},
+      e("div",{style:{fontWeight:600,color:"#92400e",marginBottom:6}},"⚠ This will reverse the return of:"),
+      e("div",null,e("span",{style:{color:"#64748b"}},"Card: "),e("b",{style:{color:"#2563eb",fontFamily:"monospace"}},p.entry.cardId)),
+      e("div",null,e("span",{style:{color:"#64748b"}},"Employee: "),e("b",null,(p.entry.empId||"")+" — "+p.entry.holder)),
+      e("div",null,e("span",{style:{color:"#64748b"}},"Returned: "),e("b",null,fmtD(p.entry.rd))," Reason: ",e("b",null,p.entry.reason))
+    ),
+    e("p",{style:{fontSize:13,color:"#374151",marginBottom:16}},"Card will be restored to Active and return record marked as Undone."),
+    e("div",{style:{display:"flex",gap:10,justifyContent:"flex-end"}},e(Btn,{variant:"ghost",onClick:p.onClose},"Cancel"),e(Btn,{variant:"warn",onClick:p.onConfirm},"↺ Undo Return"))
+  );
+}
+
+// ── DASHBOARD ──────────────────────────────────────────────────────────────────
+function Dashboard(p){
+  var cards=p.cards,alog=p.alog;
+  var active=cards.filter(function(c){return c.status==="active";});
+  var avail=cards.filter(function(c){return c.status==="available";});
+  var recent=alog.slice(0,6);
+  return e("div",{className:"fi"},
+    e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))",gap:12,marginBottom:22}},
+      e(StatCard,{label:"Total Cards",value:cards.length,color:"#6366f1",icon:"🪪"}),
+      e(StatCard,{label:"Active",value:active.length,color:"#10b981",icon:"✅"}),
+      e(StatCard,{label:"Available",value:avail.length,color:"#3b82f6",icon:"📋"}),
+      e(StatCard,{label:"Lost",value:cards.filter(function(c){return c.status==="lost";}).length,color:"#ef4444",icon:"🔴"}),
+      e(StatCard,{label:"Damaged",value:cards.filter(function(c){return c.status==="damaged";}).length,color:"#f59e0b",icon:"⚠️"})
+    ),
+    e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18,marginBottom:18}},
+      e("div",{style:Object.assign({},SRF,{padding:18})},
+        e("h3",{style:{margin:"0 0 12px",fontSize:14,fontWeight:700}},"👤 Current Card Holders"),
+        e("div",{style:{maxHeight:280,overflow:"auto"}},
+          e("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:12}},
+            e("thead",null,e("tr",{style:{background:"#f8fafc"}},["Card","Time Code","Emp ID","Name","Dept","Assigned","Days"].map(function(h){return e("th",{key:h},h);}))),
+            e("tbody",null,active.map(function(c,i){
+              return e("tr",{key:c.id,style:{borderTop:"1px solid #f1f5f9",background:i%2?"#fafafa":"#fff"}},
+                e("td",{style:{fontWeight:700,color:"#2563eb",fontFamily:"monospace"}},c.id),
+                e("td",{style:{fontFamily:"monospace",color:"#059669",fontSize:11,fontWeight:600}},c.tc||"—"),
+                e("td",{style:{fontFamily:"monospace",color:"#7c3aed",fontSize:11,fontWeight:600}},c.empId),
+                e("td",{style:{fontWeight:500}},c.holder),e("td",{style:{color:"#64748b"}},c.dept),
+                e("td",{style:{color:"#64748b",whiteSpace:"nowrap"}},fmtD(c.ad)),
+                e("td",{style:{color:"#64748b"}},daysB(c.ad))
+              );
+            }))
+          )
+        )
+      ),
+      e("div",{style:Object.assign({},SRF,{padding:18})},
+        e("h3",{style:{margin:"0 0 12px",fontSize:14,fontWeight:700}},"📋 Available Cards"),
+        avail.length===0?e("p",{style:{color:"#94a3b8",fontSize:13}},"No cards available"):
+        avail.map(function(c){return e("div",{key:c.id,style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",background:"#eff6ff",borderRadius:8,marginBottom:7,border:"1px solid #bfdbfe"}},
+          e("div",null,e("span",{style:{fontWeight:700,color:"#1d4ed8",fontFamily:"monospace"}},c.id),e("span",{style:{marginLeft:10,fontSize:11,fontFamily:"monospace",color:"#059669"}},c.tc||"—")),
+          e(Badge,{status:"available"}));})
+      )
+    ),
+    recent.length>0&&e("div",{style:Object.assign({},SRF,{padding:18})},
+      e("h3",{style:{margin:"0 0 12px",fontSize:14,fontWeight:700}},"🕐 Recent Activity"),
+      e("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:12}},
+        e("thead",null,e("tr",{style:{background:"#f8fafc"}},["Time","User","Action","Card","Detail"].map(function(h){return e("th",{key:h},h);}))),
+        e("tbody",null,recent.map(function(l,i){return e("tr",{key:l.id||i,style:{borderTop:"1px solid #f1f5f9",background:i%2?"#fafafa":"#fff"}},
+          e("td",{style:{color:"#64748b",fontSize:11,fontFamily:"monospace",whiteSpace:"nowrap"}},l.ts),
+          e("td",{style:{fontWeight:600}},l.user),
+          e("td",null,e("span",{style:{background:(ACLR[l.action]||"#64748b")+"18",color:ACLR[l.action]||"#64748b",padding:"2px 7px",borderRadius:10,fontSize:11,fontWeight:700}},ALBL[l.action]||l.action)),
+          e("td",{style:{fontFamily:"monospace",color:"#2563eb",fontWeight:700}},l.cardId),
+          e("td",{style:{color:"#64748b",maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},l.detail)
+        );}))
+      )
+    )
+  );
+}
+
+// ── ALL CARDS ──────────────────────────────────────────────────────────────────
+function AllCards(p){
+  var _a=useState(""),q=_a[0],setQ=_a[1];
+  var _b=useState("all"),fs=_b[0],setFs=_b[1];
+  var _c=useState(null),hcard=_c[0],setHcard=_c[1];
+  var _d=useState(null),rcard=_d[0],setRcard=_d[1];
+  var _e2=useState(null),ecard=_e2[0],setEcard=_e2[1];
+  var _f=useState(null),eform=_f[0],setEform=_f[1];
+  var _g=useState(false),addOpen=_g[0],setAddOpen=_g[1];
+  var _h=useState({id:"",tc:"",status:"available",notes:""}),nc=_h[0],setNc=_h[1];
+  var _i=useState(false),saving=_i[0],setSaving=_i[1];
+  var filtered=useMemo(function(){var qq=q.toLowerCase();return p.cards.filter(function(c){var mq=!qq||c.id.toLowerCase().indexOf(qq)>=0||(c.holder||"").toLowerCase().indexOf(qq)>=0||(c.empId||"").toLowerCase().indexOf(qq)>=0||(c.dept||"").toLowerCase().indexOf(qq)>=0||(c.tc||"").indexOf(qq)>=0;return mq&&(fs==="all"||c.status===fs);});},[p.cards,q,fs]);
+  function doReturn(reason,ad){setSaving(true);var t=today(),days=daysB(ad||rcard.ad,t);var he={id:Date.now(),cardId:rcard.id,empId:rcard.empId,holder:rcard.holder,dept:rcard.dept,ad:ad||rcard.ad,rd:t,reason:reason,days:days,undone:false,spId:null};p.setHist(function(h){return[...h,he];});p.setCards(function(cs){return cs.map(function(c){return c.id===rcard.id?Object.assign({},c,{status:"available",empId:null,holder:null,dept:null,ad:null}):c;});});p.addLog("return",rcard.id,"Returned by "+rcard.holder+" ("+rcard.empId+") — "+reason);setRcard(null);setSaving(false);}
+  function openEdit(card){setEcard(card);setEform({id:card.id,tc:card.tc||"",status:card.status,notes:card.notes||""});}
+  function doEdit(){var nid=eform.id.trim();if(!nid)return alert("Card ID required");if(p.cards.find(function(c){return c.id===nid&&c.id!==ecard.id;}))return alert("Card ID already exists");setSaving(true);p.setCards(function(cs){return cs.map(function(c){return c.id===ecard.id?Object.assign({},c,{id:nid,tc:eform.tc,status:eform.status,notes:eform.notes}):c;});});if(nid!==ecard.id)p.setHist(function(hs){return hs.map(function(h){return h.cardId===ecard.id?Object.assign({},h,{cardId:nid}):h;});});p.addLog("edit",ecard.id,"Edited: "+ecard.id+"→"+nid+", Status "+ecard.status+"→"+eform.status);setEcard(null);setEform(null);setSaving(false);}
+  function doAdd(){var id=nc.id.trim().toUpperCase();if(!id)return alert("Card ID required");if(p.cards.find(function(c){return c.id===id;}))return alert("Card ID exists");var tc=nc.tc.trim()||genTC(id);setSaving(true);p.setCards(function(cs){return[...cs,{id:id,tc:tc,status:nc.status,empId:null,holder:null,dept:null,ad:null,notes:nc.notes,spId:null}];});p.addLog("add",id,"Added: "+id+", TC: "+tc);setNc({id:"",tc:"",status:"available",notes:""});setAddOpen(false);setSaving(false);}
+  function handleNewId(val){var id=val.toUpperCase();setNc(function(n){return Object.assign({},n,{id:id,tc:id?genTC(id):""});});}
+  var chist=hcard?p.hist.filter(function(h){return h.cardId===hcard.id;}):[];
+  return e("div",{className:"fi"},
+    e("div",{style:{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",alignItems:"center"}},
+      e("input",{placeholder:"🔍 Search card / time code / emp / name / dept...",value:q,onChange:function(ev){setQ(ev.target.value);},style:{flex:1,minWidth:220,padding:"8px 13px",border:"1.5px solid #e2e8f0",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit"}}),
+      e("select",{value:fs,onChange:function(ev){setFs(ev.target.value);},style:{padding:"8px 11px",border:"1.5px solid #e2e8f0",borderRadius:8,fontSize:14,background:"#fff",cursor:"pointer",fontFamily:"inherit"}},
+        e("option",{value:"all"},"All Status"),Object.keys(SC).map(function(k){return e("option",{key:k,value:k},SC[k].label);})
+      ),
+      e(Btn,{variant:"primary",onClick:function(){setAddOpen(true);}},"+ Add Card")
+    ),
+    e("div",{style:Object.assign({},SRF,{overflow:"auto"})},
+      e("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:13}},
+        e("thead",null,e("tr",{style:{background:"#f8fafc",borderBottom:"1.5px solid #e2e8f0"}},
+          ["Card ID","Time Code","Status","Emp ID","Name","Dept","Assigned","Days","Actions"].map(function(h){return e("th",{key:h},h);})
+        )),
+        e("tbody",null,
+          filtered.map(function(c,i){return e("tr",{key:c.id,style:{borderBottom:"1px solid #f1f5f9",background:i%2?"#fafafa":"#fff"}},
+            e("td",{style:{fontWeight:700,fontFamily:"monospace",color:"#2563eb"}},c.id),
+            e("td",{style:{fontFamily:"monospace",fontSize:12,color:"#059669",fontWeight:600,letterSpacing:1}},c.tc||e("span",{style:{color:"#cbd5e1"}},"—")),
+            e("td",null,e(Badge,{status:c.status})),
+            e("td",{style:{fontFamily:"monospace",fontSize:12,color:"#7c3aed",fontWeight:600}},c.empId||e("span",{style:{color:"#cbd5e1"}},"—")),
+            e("td",{style:{fontWeight:500}},c.holder||e("span",{style:{color:"#94a3b8"}},"—")),
+            e("td",{style:{color:"#64748b"}},c.dept||e("span",{style:{color:"#94a3b8"}},"—")),
+            e("td",{style:{color:"#64748b",whiteSpace:"nowrap"}},fmtD(c.ad)),
+            e("td",{style:{color:"#64748b"}},c.ad?daysB(c.ad)+"d":"—"),
+            e("td",null,e("div",{style:{display:"flex",gap:4,flexWrap:"wrap"}},
+              e(Btn,{size:"sm",variant:"ghost",onClick:function(){setHcard(c);},title:"History"},"📂"),
+              e(Btn,{size:"sm",variant:"ghost",onClick:function(){openEdit(c);}},"✏ Edit"),
+              c.status==="available"&&e(Btn,{size:"sm",variant:"outline",onClick:function(){p.openAssign(c);}},"+ Assign"),
+              c.status==="active"&&e(Btn,{size:"sm",variant:"danger",onClick:function(){setRcard(c);}},"↩ Return")
+            ))
+          );}),
+          filtered.length===0&&e("tr",null,e("td",{colSpan:9,style:{padding:28,textAlign:"center",color:"#94a3b8"}},"No cards found"))
+        )
+      )
+    ),
+    addOpen&&e(Modal,{title:"➕ Add New Card",onClose:function(){setAddOpen(false);}},
+      e(FIn,{label:"Card ID",required:true,placeholder:"e.g. AC-013",hint:"Time Code auto-generates",value:nc.id,onChange:function(ev){handleNewId(ev.target.value);}}),
+      nc.id&&e("div",{style:{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"10px 14px",marginBottom:13,fontSize:13}},
+        e("div",{style:{color:"#64748b",fontSize:12,marginBottom:3}},"Auto-generated Time Code:"),
+        e("div",{style:{fontFamily:"monospace",fontSize:20,fontWeight:700,color:"#059669",letterSpacing:2}},nc.tc)
+      ),
+      e(FIn,{label:"Time Code (override)",value:nc.tc,maxLength:10,onChange:function(ev){setNc(function(n){return Object.assign({},n,{tc:ev.target.value.replace(/\D/g,"").slice(0,10)});});},hint:"10 digits numeric"}),
+      e(FSel,{label:"Status",value:nc.status,onChange:function(ev){setNc(function(n){return Object.assign({},n,{status:ev.target.value});});}},e("option",{value:"available"},"Available"),e("option",{value:"damaged"},"Damaged"),e("option",{value:"lost"},"Lost")),
+      e(FIn,{label:"Notes",value:nc.notes,onChange:function(ev){setNc(function(n){return Object.assign({},n,{notes:ev.target.value});});}}),
+      e("div",{style:{display:"flex",gap:10,justifyContent:"flex-end"}},e(Btn,{variant:"ghost",onClick:function(){setAddOpen(false);}},"Cancel"),e(Btn,{variant:"success",loading:saving,onClick:doAdd},"✓ Add Card"))
+    ),
+    ecard&&eform&&e(Modal,{title:"✏ Edit Card",onClose:function(){setEcard(null);}},
+      e(FIn,{label:"Card ID",required:true,value:eform.id,onChange:function(ev){setEform(function(f){return Object.assign({},f,{id:ev.target.value.toUpperCase()});});}}),
+      e(FIn,{label:"Time Code",value:eform.tc,maxLength:10,onChange:function(ev){setEform(function(f){return Object.assign({},f,{tc:ev.target.value.replace(/\D/g,"").slice(0,10)});});},hint:"10 digits"}),
+      e(FSel,{label:"Status",value:eform.status,onChange:function(ev){setEform(function(f){return Object.assign({},f,{status:ev.target.value});})}},Object.keys(SC).map(function(k){return e("option",{key:k,value:k,disabled:k==="active"&&ecard.status!=="active"},SC[k].label+(k==="active"&&ecard.status!=="active"?" (assign first)":""));})),
+      e(FIn,{label:"Notes",value:eform.notes,onChange:function(ev){setEform(function(f){return Object.assign({},f,{notes:ev.target.value});});}}),
+      ecard.status==="active"&&e("div",{style:{padding:"9px 13px",background:"#fffbeb",borderRadius:8,fontSize:13,color:"#92400e",border:"1px solid #fde68a",marginBottom:13}},"⚠ Card held by ",e("b",null,ecard.empId)," · ",e("b",null,ecard.holder)),
+      e("div",{style:{display:"flex",gap:10,justifyContent:"flex-end"}},e(Btn,{variant:"ghost",onClick:function(){setEcard(null);}},"Cancel"),e(Btn,{variant:"primary",loading:saving,onClick:doEdit},"✓ Save"))
+    ),
+    hcard&&e(Modal,{title:"📂 History — "+hcard.id,onClose:function(){setHcard(null);},wide:true},
+      e("div",{style:{marginBottom:12,display:"flex",gap:12,alignItems:"center"}},e(Badge,{status:hcard.status}),e("span",{style:{fontFamily:"monospace",fontSize:12,color:"#059669"}},"TC: "+hcard.tc),hcard.holder&&e("span",{style:{fontWeight:600}},e("span",{style:{color:"#7c3aed"}},hcard.empId)," · "+hcard.holder+" ("+hcard.dept+")")),
+      chist.length===0?e("p",{style:{color:"#94a3b8"}},"No history"):e("div",{style:{overflow:"auto"}},e("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:12}},
+        e("thead",null,e("tr",{style:{background:"#f8fafc"}},["Emp ID","Name","Dept","Assigned","Returned","Reason","Days",""].map(function(h){return e("th",{key:h},h);}))),
+        e("tbody",null,chist.map(function(h){return e("tr",{key:h.id,style:{borderTop:"1px solid #f1f5f9",opacity:h.undone?0.5:1}},
+          e("td",{style:{fontFamily:"monospace",fontSize:11,color:"#7c3aed"}},h.empId||"—"),e("td",null,h.holder),e("td",{style:{color:"#64748b"}},h.dept),
+          e("td",{style:{color:"#64748b",whiteSpace:"nowrap"}},fmtD(h.ad)),e("td",{style:{color:"#64748b",whiteSpace:"nowrap"}},fmtD(h.rd)),
+          e("td",{style:{color:"#64748b"}},h.reason),e("td",{style:{fontWeight:700,color:"#2563eb"}},h.days+"d"),
+          e("td",null,h.undone&&e("span",{style:{background:"#fef2f2",color:"#ef4444",padding:"2px 7px",borderRadius:8,fontSize:10,fontWeight:600}},"UNDONE"))
+        );}))
+      ))
+    ),
+    rcard&&e(ReturnModal,{card:rcard,onClose:function(){setRcard(null);},onConfirm:doReturn})
+  );
+}
+
+// ── ASSIGN / RETURN ────────────────────────────────────────────────────────────
+function AssignReturn(p){
+  var _a=useState(p.preselect||null),assignCard=_a[0],setAssignCard=_a[1];
+  var _b=useState({empId:"",holder:"",dept:p.depts[0]||"",date:today()}),form=_b[0],setForm=_b[1];
+  var _c=useState(null),rtgt=_c[0],setRtgt=_c[1];
+  var _d=useState(null),etgt=_d[0],setEtgt=_d[1];
+  var _e2=useState(""),edv=_e2[0],setEdv=_e2[1];
+  var _f=useState(false),saving=_f[0],setSaving=_f[1];
+  var _g=useState(null),utgt=_g[0],setUtgt=_g[1];
+  useMemo(function(){if(p.preselect)setAssignCard(p.preselect);},[p.preselect]);
+  var actv=p.cards.filter(function(c){return c.status==="active";});
+  var avail=p.cards.filter(function(c){return c.status==="available";});
+  var recent=p.hist.filter(function(h){return !h.undone;}).slice(-10).reverse();
+  function doAssign(){if(!form.empId.trim())return alert("Employee ID required");if(!form.holder.trim())return alert("Name required");if(!assignCard)return alert("Select a card");setSaving(true);p.setCards(function(cs){return cs.map(function(c){return c.id===assignCard.id?Object.assign({},c,{status:"active",empId:form.empId.toUpperCase(),holder:form.holder,dept:form.dept,ad:form.date}):c;});});p.addLog("assign",assignCard.id,"Assigned to "+form.empId+" "+form.holder+" ("+form.dept+")");setAssignCard(null);p.clearPreselect();setForm({empId:"",holder:"",dept:p.depts[0]||"",date:today()});setSaving(false);}
+  function doReturn(reason,ad){setSaving(true);var t=today(),days=daysB(ad||rtgt.ad,t);var he={id:Date.now(),cardId:rtgt.id,empId:rtgt.empId,holder:rtgt.holder,dept:rtgt.dept,ad:ad||rtgt.ad,rd:t,reason:reason,days:days,undone:false,spId:null};p.setHist(function(h){return[...h,he];});p.setCards(function(cs){return cs.map(function(c){return c.id===rtgt.id?Object.assign({},c,{status:"available",empId:null,holder:null,dept:null,ad:null}):c;});});p.addLog("return",rtgt.id,"Returned by "+rtgt.holder+" — "+reason);setRtgt(null);setSaving(false);}
+  function doUndo(){var en=utgt;p.setCards(function(cs){return cs.map(function(c){return c.id===en.cardId?Object.assign({},c,{status:"active",empId:en.empId,holder:en.holder,dept:en.dept,ad:en.ad}):c;});});p.setHist(function(hs){return hs.map(function(h){return h.id===en.id?Object.assign({},h,{undone:true}):h;});});p.addLog("undo-return",en.cardId,"Undo return for "+en.holder);setUtgt(null);}
+  function doEditDept(){if(!edv.trim())return;setSaving(true);p.setCards(function(cs){return cs.map(function(c){return c.id===etgt.id?Object.assign({},c,{dept:edv}):c;});});p.addLog("dept-change",etgt.id,"Dept: "+etgt.dept+" → "+edv);setEtgt(null);setEdv("");setSaving(false);}
+  return e("div",{className:"fi"},
+    e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18,marginBottom:18}},
+      e("div",{style:Object.assign({},SRF,{padding:20})},
+        e("h3",{style:{margin:"0 0 14px",fontSize:14,fontWeight:700}},"➕ Assign Card"),
+        e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}},
+          e("div",{style:{gridColumn:"1 / -1"}},e("label",{style:{display:"block",fontSize:13,fontWeight:600,color:"#374151",marginBottom:4}},"Select Available Card *"),
+            e("select",{value:assignCard?assignCard.id:"",onChange:function(ev){setAssignCard(avail.find(function(c){return c.id===ev.target.value;})||null);},style:{width:"100%",padding:"8px 11px",border:"1.5px solid #e2e8f0",borderRadius:8,fontSize:14,background:"#fff",fontFamily:"inherit"}},
+              e("option",{value:""},"-- Select card --"),avail.map(function(c){return e("option",{key:c.id,value:c.id},c.id+" · "+(c.tc||"—"));}))),
+          assignCard&&e("div",{style:{gridColumn:"1 / -1",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"7px 12px",fontSize:12}},e("span",{style:{color:"#64748b"}},"Time Code: "),e("b",{style:{fontFamily:"monospace",color:"#059669"}},assignCard.tc||"—")),
+          e("div",null,e(FIn,{label:"Employee ID",required:true,placeholder:"EMP-013",value:form.empId,onChange:function(ev){setForm(function(f){return Object.assign({},f,{empId:ev.target.value});});}})),
+          e("div",null,e(FIn,{label:"Full Name",required:true,value:form.holder,onChange:function(ev){setForm(function(f){return Object.assign({},f,{holder:ev.target.value});});}})),
+          e("div",null,e("label",{style:{display:"block",fontSize:13,fontWeight:600,color:"#374151",marginBottom:4}},"Department *"),e("select",{value:form.dept,onChange:function(ev){setForm(function(f){return Object.assign({},f,{dept:ev.target.value});});},style:{width:"100%",padding:"8px 11px",border:"1.5px solid #e2e8f0",borderRadius:8,fontSize:14,background:"#fff",fontFamily:"inherit"}},p.depts.map(function(d){return e("option",{key:d},d);}))),
+          e("div",null,e(FIn,{label:"Assigned Date",type:"date",value:form.date,onChange:function(ev){setForm(function(f){return Object.assign({},f,{date:ev.target.value});});}}))
+        ),
+        e("div",{style:{marginTop:4,display:"flex",justifyContent:"flex-end"}},e(Btn,{variant:"success",loading:saving,disabled:!assignCard,onClick:doAssign},"✓ Assign Card"))
+      ),
+      e("div",{style:Object.assign({},SRF,{padding:20})},
+        e("h3",{style:{margin:"0 0 12px",fontSize:14,fontWeight:700}},"↺ Undo Incorrect Return"),
+        e("p",{style:{fontSize:12,color:"#64748b",marginBottom:12}},"Reverse a card that was returned by mistake."),
+        recent.length===0?e("p",{style:{fontSize:13,color:"#94a3b8"}},"No recent returns"):
+        e("div",{style:{display:"flex",flexDirection:"column",gap:7}},recent.slice(0,5).map(function(h){
+          return e("div",{key:h.id,style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 12px",borderRadius:8,background:"#f8fafc",border:"1px solid #e2e8f0",fontSize:13}},
+            e("div",null,e("span",{style:{fontFamily:"monospace",fontWeight:700,color:"#2563eb"}},h.cardId),e("span",{style:{margin:"0 6px",color:"#94a3b8"}},"·"),e("span",{style:{fontWeight:500}},h.holder),e("span",{style:{margin:"0 6px",color:"#94a3b8"}},"·"),e("span",{style:{color:"#64748b",fontSize:12}},fmtD(h.rd))),
+            e(Btn,{size:"sm",variant:"warn",onClick:function(){setUtgt(h);}},"↺ Undo"));
+        }))
+      )
+    ),
+    e("div",{style:Object.assign({},SRF,{padding:20})},
+      e("h3",{style:{margin:"0 0 12px",fontSize:14,fontWeight:700}},"👤 Current Card Holders ("+actv.length+")"),
+      e("div",{style:{overflow:"auto"}},e("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:13}},
+        e("thead",null,e("tr",{style:{background:"#f8fafc",borderBottom:"1.5px solid #e2e8f0"}},["Card","TC","Emp ID","Name","Dept","Assigned","Days","Actions"].map(function(h){return e("th",{key:h},h);}))),
+        e("tbody",null,
+          actv.map(function(c,i){return e("tr",{key:c.id,style:{borderBottom:"1px solid #f1f5f9",background:i%2?"#fafafa":"#fff"}},
+            e("td",{style:{fontWeight:700,fontFamily:"monospace",color:"#2563eb"}},c.id),
+            e("td",{style:{fontFamily:"monospace",fontSize:11,color:"#059669"}},(c.tc||"—").slice(0,6)+"…"),
+            e("td",{style:{fontFamily:"monospace",fontSize:12,color:"#7c3aed",fontWeight:600}},c.empId),
+            e("td",{style:{fontWeight:500}},c.holder),
+            e("td",null,etgt&&etgt.id===c.id?
+              e("div",{style:{display:"flex",gap:6,alignItems:"center"}},e("select",{value:edv,onChange:function(ev){setEdv(ev.target.value);},style:{padding:"4px 7px",border:"1.5px solid #2563eb",borderRadius:6,fontSize:13,background:"#fff",fontFamily:"inherit"}},p.depts.map(function(d){return e("option",{key:d},d);})),e(Btn,{size:"sm",variant:"success",loading:saving,onClick:doEditDept},"✓"),e(Btn,{size:"sm",variant:"ghost",onClick:function(){setEtgt(null);}},"✕")):
+              e("span",{style:{display:"inline-flex",alignItems:"center",gap:5}},e("span",{style:{color:"#64748b"}},c.dept),e("button",{onClick:function(){setEtgt(c);setEdv(c.dept);},style:{border:"none",background:"none",cursor:"pointer",fontSize:12,color:"#94a3b8",padding:0}},"✏"))
+            ),
+            e("td",{style:{color:"#64748b",whiteSpace:"nowrap"}},fmtD(c.ad)),
+            e("td",null,e("span",{style:{background:"#f0fdf4",color:"#16a34a",fontWeight:700,padding:"3px 10px",borderRadius:20,fontSize:12}},daysB(c.ad)+"d")),
+            e("td",null,e(Btn,{size:"sm",variant:"danger",onClick:function(){setRtgt(c);}},"↩ Return"))
+          );}),
+          actv.length===0&&e("tr",null,e("td",{colSpan:8,style:{padding:22,textAlign:"center",color:"#94a3b8"}},"No active cards"))
+        )
+      ))
+    ),
+    rtgt&&e(ReturnModal,{card:rtgt,onClose:function(){setRtgt(null);},onConfirm:doReturn}),
+    utgt&&e(UndoModal,{entry:utgt,onClose:function(){setUtgt(null);},onConfirm:doUndo})
+  );
+}
+
+// ── HISTORY ────────────────────────────────────────────────────────────────────
+function HistoryTab(p){
+  var _a=useState(""),q=_a[0],setQ=_a[1];
+  var _b=useState(null),utgt=_b[0],setUtgt=_b[1];
+  var sorted=useMemo(function(){var qq=q.toLowerCase();return[...p.hist].filter(function(h){return !qq||h.cardId.toLowerCase().indexOf(qq)>=0||h.holder.toLowerCase().indexOf(qq)>=0||(h.empId||"").toLowerCase().indexOf(qq)>=0||h.dept.toLowerCase().indexOf(qq)>=0||h.reason.toLowerCase().indexOf(qq)>=0;}).sort(function(a,b){return new Date(b.rd)-new Date(a.rd);});},[p.hist,q]);
+  function doUndo(){var en=utgt;p.setCards(function(cs){return cs.map(function(c){return c.id===en.cardId?Object.assign({},c,{status:"active",empId:en.empId,holder:en.holder,dept:en.dept,ad:en.ad}):c;});});p.setHist(function(hs){return hs.map(function(h){return h.id===en.id?Object.assign({},h,{undone:true}):h;});});p.addLog("undo-return",en.cardId,"Undo for "+en.holder);setUtgt(null);}
+  return e("div",{className:"fi"},
+    e("input",{placeholder:"🔍 Search...",value:q,onChange:function(ev){setQ(ev.target.value);},style:{width:"100%",padding:"8px 13px",border:"1.5px solid #e2e8f0",borderRadius:8,fontSize:14,outline:"none",marginBottom:14,boxSizing:"border-box",fontFamily:"inherit"}}),
+    e("div",{style:Object.assign({},SRF,{overflow:"auto"})},
+      e("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:13}},
+        e("thead",null,e("tr",{style:{background:"#f8fafc",borderBottom:"1.5px solid #e2e8f0"}},["Card ID","Emp ID","Name","Dept","Assigned","Returned","Reason","Days","Action"].map(function(h){return e("th",{key:h},h);}))),
+        e("tbody",null,
+          sorted.map(function(h,i){return e("tr",{key:h.id,style:{borderBottom:"1px solid #f1f5f9",background:i%2?"#fafafa":"#fff",opacity:h.undone?0.5:1}},
+            e("td",{style:{fontWeight:700,fontFamily:"monospace",color:"#2563eb"}},h.cardId),
+            e("td",{style:{fontFamily:"monospace",fontSize:12,color:"#7c3aed",fontWeight:600}},h.empId||"—"),
+            e("td",{style:{fontWeight:500}},h.holder),e("td",{style:{color:"#64748b"}},h.dept),
+            e("td",{style:{color:"#64748b",whiteSpace:"nowrap"}},fmtD(h.ad)),e("td",{style:{color:"#64748b",whiteSpace:"nowrap"}},fmtD(h.rd)),
+            e("td",null,e("span",{style:{background:h.reason==="Resigned"?"#fef2f2":"#eff6ff",color:h.reason==="Resigned"?"#ef4444":"#2563eb",padding:"2px 8px",borderRadius:20,fontSize:11,fontWeight:600}},h.reason)),
+            e("td",null,e("span",{style:{background:"#f0fdf4",color:"#16a34a",fontWeight:700,padding:"2px 8px",borderRadius:20,fontSize:12}},h.days+"d")),
+            e("td",null,h.undone?e("span",{style:{background:"#fef2f2",color:"#ef4444",padding:"2px 7px",borderRadius:8,fontSize:10,fontWeight:600}},"UNDONE"):e(Btn,{size:"sm",variant:"warn",onClick:function(){setUtgt(h);}},"↺ Undo"))
+          );}),
+          sorted.length===0&&e("tr",null,e("td",{colSpan:9,style:{padding:28,textAlign:"center",color:"#94a3b8"}},"No records"))
+        )
+      )
+    ),
+    utgt&&e(UndoModal,{entry:utgt,onClose:function(){setUtgt(null);},onConfirm:doUndo})
+  );
+}
+
+// ── AUDIT LOG ──────────────────────────────────────────────────────────────────
+function AuditLog(p){
+  var _a=useState(""),q=_a[0],setQ=_a[1];
+  var filtered=useMemo(function(){var qq=q.toLowerCase();return p.alog.filter(function(l){return !qq||l.cardId.toLowerCase().indexOf(qq)>=0||l.user.toLowerCase().indexOf(qq)>=0||l.detail.toLowerCase().indexOf(qq)>=0;});},[p.alog,q]);
+  return e("div",{className:"fi"},
+    e("input",{placeholder:"🔍 Search...",value:q,onChange:function(ev){setQ(ev.target.value);},style:{width:"100%",padding:"8px 13px",border:"1.5px solid #e2e8f0",borderRadius:8,fontSize:14,outline:"none",marginBottom:14,boxSizing:"border-box",fontFamily:"inherit"}}),
+    p.alog.length===0?e("div",{style:Object.assign({},SRF,{padding:40,textAlign:"center"})},e("div",{style:{fontSize:40,marginBottom:12}},"📋"),e("h3",{style:{color:"#374151",marginBottom:6}},"No Activity Logged Yet"),e("p",{style:{color:"#94a3b8",fontSize:13}},"All card operations will appear here.")):
+    e("div",{style:Object.assign({},SRF,{overflow:"auto"})},
+      e("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:13}},
+        e("thead",null,e("tr",{style:{background:"#f8fafc",borderBottom:"1.5px solid #e2e8f0"}},["Timestamp","User","Action","Card ID","Detail"].map(function(h){return e("th",{key:h},h);}))),
+        e("tbody",null,
+          filtered.map(function(l,i){return e("tr",{key:l.id||i,style:{borderBottom:"1px solid #f1f5f9",background:i%2?"#fafafa":"#fff"}},
+            e("td",{style:{color:"#64748b",fontSize:11,fontFamily:"monospace",whiteSpace:"nowrap"}},l.ts),
+            e("td",{style:{fontWeight:600}},l.user),
+            e("td",null,e("span",{style:{background:(ACLR[l.action]||"#64748b")+"18",color:ACLR[l.action]||"#64748b",padding:"2px 9px",borderRadius:20,fontSize:11,fontWeight:700}},ALBL[l.action]||l.action)),
+            e("td",{style:{fontFamily:"monospace",fontWeight:700,color:"#2563eb"}},l.cardId),
+            e("td",{style:{color:"#374151",maxWidth:300,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},l.detail)
+          );}),
+          filtered.length===0&&e("tr",null,e("td",{colSpan:5,style:{padding:28,textAlign:"center",color:"#94a3b8"}},"No logs"))
+        )
+      )
+    )
+  );
+}
+
+// ── IMPORT ─────────────────────────────────────────────────────────────────────
+var FLBL={cardId:"Card ID",tc:"Time Code",empId:"Emp ID",holder:"Name",dept:"Department",status:"Status",ad:"Assigned Date",notes:"Notes"};
+function guessMap(headers){var lo=headers.map(function(h){return h.toLowerCase();});var m={};var rules={cardId:["card","cardid","access"],tc:["timecode","time_code","code"],empId:["emp","empid","employee id"],holder:["name","holder"],dept:["dept","department","division"],status:["status"],ad:["date","assigned"],notes:["note","notes"]};Object.keys(rules).forEach(function(f){var kws=rules[f];var idx=lo.findIndex(function(h){return kws.some(function(k){return h.indexOf(k)>=0;});});if(idx>=0)m[f]=headers[idx];});return m;}
+function ImportTab(p){
+  var _a=useState(1),step=_a[0],setStep=_a[1];
+  var _b=useState([]),rows=_b[0],setRows=_b[1];
+  var _c=useState([]),headers=_c[0],setHeaders=_c[1];
+  var _d=useState({}),map=_d[0],setMap=_d[1];
+  var _e2=useState("merge"),imode=_e2[0],setImode=_e2[1];
+  var _f=useState({toAdd:[],toUpdate:[],skipped:[]}),prev=_f[0],setPrev=_f[1];
+  var _g=useState(""),fname=_g[0],setFname=_g[1];
+  var _h=useState(false),drag=_h[0],setDrag=_h[1];
+  var _i=useState(null),result=_i[0],setResult=_i[1];
+  var _j=useState(false),saving=_j[0],setSaving=_j[1];
+  var fref=useRef(null);
+  function readFile(file){if(!file)return;setFname(file.name);var r=new FileReader();r.onload=function(ev){try{var wb=XLSX.read(ev.target.result,{type:"array",cellDates:true});var ws=wb.Sheets[wb.SheetNames[0]];var data=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,dateNF:"YYYY-MM-DD"});if(data.length<2)return alert("No data");var hdrs=data[0].map(function(h){return String(h||"").trim();}).filter(Boolean);var rws=data.slice(1).filter(function(r){return r.some(function(c){return c!==null&&c!==undefined&&c!=="";});});setHeaders(hdrs);setRows(rws);setMap(guessMap(hdrs));setStep(2);}catch(err){alert("Cannot read: "+err.message);}};r.readAsArrayBuffer(file);}
+  function buildPreview(){var toAdd=[],toUpdate=[],skipped=[];var em={};p.cards.forEach(function(c){em[c.id]=c;});var nd=new Set(p.depts);rows.forEach(function(row,ri){function get(f){var col=map[f];if(!col)return null;var idx=headers.indexOf(col);return idx>=0?String(row[idx]||"").trim():null;}var cardId=(get("cardId")||"").toUpperCase();if(!cardId){skipped.push({row:ri+2,reason:"No Card ID"});return;}var tc=get("tc")||genTC(cardId);var empId=get("empId")||null,holder=get("holder")||null,dept=get("dept")||null,rawSt=get("status"),status=rawSt?normStatus(rawSt):"available",ad=parseXlDate(get("ad")),notes=get("notes")||"";if(dept)nd.add(dept);var obj={id:cardId,tc:tc,status:status,empId:empId,holder:holder,dept:dept,ad:ad,notes:notes,spId:null};if(em[cardId])toUpdate.push(Object.assign({},obj,{_ex:em[cardId]}));else toAdd.push(obj);});setPrev({toAdd:toAdd,toUpdate:toUpdate,skipped:skipped,newDepts:[...nd].filter(function(d){return p.depts.indexOf(d)<0;})});setStep(3);}
+  function doImport(){setSaving(true);if(prev.newDepts&&prev.newDepts.length)p.setDepts(function(d){return[...d,...prev.newDepts];});if(imode==="replace"){p.setCards([...prev.toAdd,...prev.toUpdate.map(function(r){var obj=Object.assign({},r);delete obj._ex;return obj;})]);}else{var um={};prev.toUpdate.forEach(function(r){var obj=Object.assign({},r);delete obj._ex;um[r.id]=obj;});p.setCards(function(cs){var upd=cs.map(function(c){return um[c.id]?Object.assign({},c,um[c.id]):c;});return[...upd,...prev.toAdd];});}p.addLog("import","—","Imported "+prev.toAdd.length+" new + "+prev.toUpdate.length+" updated");setResult({added:prev.toAdd.length,updated:prev.toUpdate.length,skipped:prev.skipped.length});setSaving(false);setStep(4);}
+  function reset(){setStep(1);setRows([]);setHeaders([]);setMap({});setFname("");setResult(null);setPrev({toAdd:[],toUpdate:[],skipped:[]});}
+  function dlTpl(){var ws=XLSX.utils.aoa_to_sheet([["Card ID","Time Code","Employee ID","Name","Department","Status","Assigned Date","Notes"],["AC-101","0001234567","EMP-101","James Smith","IT","active","2024-01-15",""],["AC-102","","","","","available","",""]]);ws["!cols"]=[{wch:12},{wch:14},{wch:14},{wch:20},{wch:14},{wch:12},{wch:16},{wch:22}];var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"AccessCards");XLSX.writeFile(wb,"access_card_template.xlsx");}
+  var steps=[{n:1,l:"Upload"},{n:2,l:"Map"},{n:3,l:"Preview"},{n:4,l:"Done"}];
+  return e("div",{className:"fi"},
+    e("div",{style:{display:"flex",alignItems:"center",gap:0,marginBottom:22}},steps.map(function(s,i){return e(React.Fragment,{key:s.n},e("div",{style:{display:"flex",alignItems:"center",gap:7}},e("div",{style:{width:26,height:26,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:13,background:step>s.n?"#10b981":step===s.n?"#2563eb":"#e2e8f0",color:step>=s.n?"#fff":"#94a3b8",flexShrink:0}},step>s.n?"✓":s.n),e("span",{style:{fontSize:13,fontWeight:step===s.n?700:500,color:step>=s.n?"#0f172a":"#94a3b8",whiteSpace:"nowrap"}},s.l)),i<3&&e("div",{style:{flex:1,height:2,background:step>s.n?"#10b981":"#e2e8f0",margin:"0 8px",minWidth:16}}));})),
+    step===1&&e("div",{style:{display:"grid",gridTemplateColumns:"1fr auto",gap:18}},
+      e("div",{style:Object.assign({},SRF,{padding:22})},e("h3",{style:{margin:"0 0 5px",fontSize:14,fontWeight:700}},"📂 Upload Excel"),e("p",{style:{fontSize:13,color:"#64748b",marginBottom:18}},"Supports .xlsx .xls .csv"),e("div",{className:"dz"+(drag?" drag":""),onDragOver:function(ev){ev.preventDefault();setDrag(true);},onDragLeave:function(){setDrag(false);},onDrop:function(ev){ev.preventDefault();setDrag(false);var f=ev.dataTransfer.files[0];if(f)readFile(f);else alert("Use .xlsx .xls .csv");},onClick:function(){fref.current.click();}},e("input",{ref:fref,type:"file",accept:".xlsx,.xls,.csv",onChange:function(ev){readFile(ev.target.files[0]);}}),e("div",{style:{fontSize:36,marginBottom:10}},"📊"),e("div",{style:{fontWeight:600,fontSize:14,color:"#374151",marginBottom:5}},"Click or drag file here"),e("div",{style:{fontSize:12,color:"#94a3b8"}},".xlsx · .xls · .csv"))),
+      e("div",{style:Object.assign({},SRF,{padding:18,minWidth:200})},e("h4",{style:{margin:"0 0 10px",fontSize:13,fontWeight:700}},"Columns"),["Card ID ✱","Time Code","Employee ID","Name","Department","Status","Assigned Date","Notes"].map(function(c){return e("div",{key:c,style:{fontSize:12,color:"#64748b",marginBottom:4}},c);}),e("div",{style:{marginTop:12,paddingTop:12,borderTop:"1px solid #f1f5f9"}},e(Btn,{variant:"ghost",size:"sm",onClick:dlTpl},"⬇ Template")))
+    ),
+    step===2&&e("div",null,
+      e("div",{style:Object.assign({},SRF,{padding:20,marginBottom:14})},e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}},e("h3",{style:{margin:0,fontSize:14,fontWeight:700}},'Map Columns — "'+fname+'"'),e("span",{style:{fontSize:13,color:"#64748b"}},rows.length+" rows")),
+        e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11}},Object.keys(FLBL).map(function(f){return e("div",{key:f},e("label",{style:{display:"block",fontSize:12,fontWeight:600,color:"#374151",marginBottom:4}},FLBL[f]+(f==="cardId"?" *":"")),e("select",{value:map[f]||"",onChange:function(ev){var v=ev.target.value;setMap(function(m){var nm=Object.assign({},m);if(v)nm[f]=v;else delete nm[f];return nm;});},style:{width:"100%",padding:"7px 10px",border:"1.5px solid "+(map[f]?"#e2e8f0":"#fca5a5"),borderRadius:7,fontSize:13,background:"#fff",fontFamily:"inherit"}},e("option",{value:""},"— skip —"),headers.map(function(h){return e("option",{key:h,value:h},h);})));}))
+      ),
+      e("div",{style:{display:"flex",gap:12,marginBottom:14}},
+        [["merge","🔄 Merge"],["replace","🗑 Replace"]].map(function(row){return e("label",{key:row[0],style:{display:"flex",alignItems:"center",gap:7,cursor:"pointer",padding:"9px 13px",borderRadius:8,border:"2px solid "+(imode===row[0]?"#2563eb":"#e2e8f0"),background:imode===row[0]?"#eff6ff":"#fff",fontSize:13,fontWeight:imode===row[0]?600:400}},e("input",{type:"radio",name:"imode",value:row[0],checked:imode===row[0],onChange:function(){setImode(row[0]);},style:{accentColor:"#2563eb"}}),row[1]);})
+      ),
+      e("div",{style:{display:"flex",gap:10,justifyContent:"flex-end"}},e(Btn,{variant:"ghost",onClick:reset},"← Back"),e(Btn,{variant:"primary",disabled:!map.cardId,onClick:buildPreview},"Preview →"))
+    ),
+    step===3&&e("div",null,
+      e("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:16}},
+        e("div",{style:Object.assign({},SRF,{padding:13,textAlign:"center"})},e("div",{style:{fontSize:24,fontWeight:700,color:"#10b981"}},prev.toAdd.length),e("div",{style:{fontSize:11,color:"#64748b",marginTop:3}},"➕ New")),
+        e("div",{style:Object.assign({},SRF,{padding:13,textAlign:"center"})},e("div",{style:{fontSize:24,fontWeight:700,color:"#f59e0b"}},prev.toUpdate.length),e("div",{style:{fontSize:11,color:"#64748b",marginTop:3}},"🔄 Update")),
+        e("div",{style:Object.assign({},SRF,{padding:13,textAlign:"center"})},e("div",{style:{fontSize:24,fontWeight:700,color:"#ef4444"}},prev.skipped.length),e("div",{style:{fontSize:11,color:"#64748b",marginTop:3}},"⏭ Skipped"))
+      ),
+      prev.newDepts&&prev.newDepts.length>0&&e("div",{style:{padding:"8px 13px",background:"#f0fdf4",borderRadius:8,fontSize:13,color:"#166534",border:"1px solid #bbf7d0",marginBottom:12}},"🏢 New depts: "+prev.newDepts.join(", ")),
+      e("div",{style:{display:"flex",gap:10,justifyContent:"flex-end"}},e(Btn,{variant:"ghost",onClick:function(){setStep(2);}},"← Back"),e(Btn,{variant:"success",loading:saving,disabled:prev.toAdd.length===0&&prev.toUpdate.length===0,onClick:doImport},"✓ Import ("+(prev.toAdd.length+prev.toUpdate.length)+")"))
+    ),
+    step===4&&result&&e("div",{style:Object.assign({},SRF,{padding:40,textAlign:"center"})},
+      e("div",{style:{fontSize:48,marginBottom:12}},"🎉"),e("h2",{style:{margin:"0 0 6px",fontSize:20,fontWeight:700}},"Import Successful!"),
+      e("div",{style:{display:"flex",gap:14,justifyContent:"center",margin:"18px 0 26px"}},
+        e("div",{style:{padding:"12px 22px",background:"#f0fdf4",borderRadius:10,border:"1px solid #bbf7d0"}},e("div",{style:{fontSize:26,fontWeight:700,color:"#16a34a"}},result.added),e("div",{style:{fontSize:12,color:"#16a34a"}},"Added")),
+        e("div",{style:{padding:"12px 22px",background:"#fffbeb",borderRadius:10,border:"1px solid #fde68a"}},e("div",{style:{fontSize:26,fontWeight:700,color:"#d97706"}},result.updated),e("div",{style:{fontSize:12,color:"#d97706"}},"Updated"))
+      ),
+      e("div",{style:{display:"flex",gap:10,justifyContent:"center"}},e(Btn,{variant:"ghost",onClick:reset},"📂 Import Another"),e(Btn,{variant:"primary",onClick:function(){window._setTab&&window._setTab("cards");}},"🪪 View Cards →"))
+    )
+  );
+}
+
+// ── EXPORT ─────────────────────────────────────────────────────────────────────
+function ExportTab(p){
+  var _a=useState(false),exporting=_a[0],setExp=_a[1];
+  var _b=useState(null),lastExp=_b[0],setLastExp=_b[1];
+  var _c=useState({sheets:{cards:true,active:true,available:true,history:true,audit:false,summary:true},fs:"all",df:"",dt:"",fname:"AccessCard_"+today()}),opts=_c[0],setOpts=_c[1];
+  var SL={active:"Active",available:"Available",lost:"Lost",damaged:"Damaged"};
+  var fc=useMemo(function(){return opts.fs==="all"?p.cards:p.cards.filter(function(c){return c.status===opts.fs;});},[p.cards,opts.fs]);
+  var fh=useMemo(function(){var h=[...p.hist];if(opts.df)h=h.filter(function(x){return x.rd>=opts.df;});if(opts.dt)h=h.filter(function(x){return x.rd<=opts.dt;});return h;},[p.hist,opts.df,opts.dt]);
+  function cw(w){return{wch:w};}
+  function bCards(data){var hdr=["Card ID","Time Code","Status","Emp ID","Name","Department","Assigned Date","Days","Notes"];var rows=data.map(function(c){return[c.id,c.tc||"",SL[c.status]||c.status,c.empId||"",c.holder||"",c.dept||"",c.ad?fmtD(c.ad):"",c.ad&&c.status==="active"?daysB(c.ad):"",c.notes||""];});var ws=XLSX.utils.aoa_to_sheet([hdr].concat(rows));ws["!cols"]=[cw(12),cw(16),cw(11),cw(14),cw(22),cw(14),cw(16),cw(12),cw(26)];ws["!freeze"]={xSplit:0,ySplit:1};return ws;}
+  function bHist(data){var hdr=["Card ID","Emp ID","Name","Department","Assigned","Returned","Reason","Days","Undone"];var rows=data.map(function(h){return[h.cardId,h.empId||"",h.holder||"",h.dept||"",h.ad?fmtD(h.ad):"",h.rd?fmtD(h.rd):"",h.reason||"",h.days||0,h.undone?"Yes":""];});var ws=XLSX.utils.aoa_to_sheet([hdr].concat(rows));ws["!cols"]=[cw(12),cw(14),cw(22),cw(14),cw(16),cw(16),cw(18),cw(8),cw(8)];ws["!freeze"]={xSplit:0,ySplit:1};return ws;}
+  function bAudit(){var hdr=["Timestamp","User","Action","Card ID","Detail"];var rows=p.alog.map(function(l){return[l.ts,l.user,ALBL[l.action]||l.action,l.cardId,l.detail];});var ws=XLSX.utils.aoa_to_sheet([hdr].concat(rows));ws["!cols"]=[cw(22),cw(20),cw(16),cw(12),cw(50)];ws["!freeze"]={xSplit:0,ySplit:1};return ws;}
+  function bSum(){var now=new Date().toLocaleString("en-GB",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});var byS={};["active","available","lost","damaged"].forEach(function(s){byS[s]=p.cards.filter(function(c){return c.status===s;}).length;});var rows=[["Access Card Management — Summary"],["Generated",now],[""],["Statistics"],["Total",p.cards.length],["Active",byS.active||0],["Available",byS.available||0],["Lost",byS.lost||0],["Damaged",byS.damaged||0]];var ws=XLSX.utils.aoa_to_sheet(rows);ws["!cols"]=[cw(22),cw(12)];return ws;}
+  function doExport(){setExp(true);try{var wb=XLSX.utils.book_new();if(opts.sheets.summary)XLSX.utils.book_append_sheet(wb,bSum(),"Summary");if(opts.sheets.cards)XLSX.utils.book_append_sheet(wb,bCards(fc),"All Cards");if(opts.sheets.active)XLSX.utils.book_append_sheet(wb,bCards(fc.filter(function(c){return c.status==="active";})),"Active Cards");if(opts.sheets.available)XLSX.utils.book_append_sheet(wb,bCards(fc.filter(function(c){return c.status==="available";})),"Available");if(opts.sheets.history)XLSX.utils.book_append_sheet(wb,bHist(fh),"Return History");if(opts.sheets.audit)XLSX.utils.book_append_sheet(wb,bAudit(),"Audit Log");XLSX.writeFile(wb,(opts.fname||"AccessCard")+".xlsx");var d=new Date();setLastExp(String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")+":"+String(d.getSeconds()).padStart(2,"0"));}catch(err){alert("Export failed: "+err.message);}setExp(false);}
+  function tg(k){setOpts(function(o){var s=Object.assign({},o.sheets);s[k]=!s[k];return Object.assign({},o,{sheets:s});});}
+  var selCount=Object.values(opts.sheets).filter(Boolean).length;
+  var sdefs=[{k:"summary",icon:"📊",label:"Summary"},{k:"cards",icon:"🪪",label:"All Cards ("+fc.length+")"},{k:"active",icon:"✅",label:"Active ("+fc.filter(function(c){return c.status==="active";}).length+")"},{k:"available",icon:"📋",label:"Available ("+fc.filter(function(c){return c.status==="available";}).length+")"},{k:"history",icon:"📅",label:"Return History ("+fh.length+")"},{k:"audit",icon:"🔍",label:"Audit Log ("+p.alog.length+")"}];
+  return e("div",{className:"fi"},
+    e("div",{style:{display:"grid",gridTemplateColumns:"1fr 300px",gap:18,alignItems:"start"}},
+      e("div",null,
+        e("div",{style:Object.assign({},SRF,{padding:20,marginBottom:16})},e("h3",{style:{margin:"0 0 4px",fontSize:14,fontWeight:700}},"📑 Select Sheets"),e("p",{style:{fontSize:12,color:"#64748b",marginBottom:14}},"All selected sheets in one .xlsx file"),
+          e("div",{style:{display:"flex",flexDirection:"column",gap:8}},sdefs.map(function(s){return e("label",{key:s.k,style:{display:"flex",alignItems:"center",gap:11,padding:"10px 14px",borderRadius:9,border:"2px solid "+(opts.sheets[s.k]?"#2563eb":"#e2e8f0"),background:opts.sheets[s.k]?"#eff6ff":"#fff",cursor:"pointer"}},e("input",{type:"checkbox",checked:opts.sheets[s.k],onChange:function(){tg(s.k);},style:{width:15,height:15,accentColor:"#2563eb"}}),e("span",{style:{fontSize:16,flexShrink:0}},s.icon),e("span",{style:{fontWeight:600,fontSize:13,color:opts.sheets[s.k]?"#1e40af":"#374151"}},s.label));}))
+        ),
+        e("div",{style:Object.assign({},SRF,{padding:18})},e("h3",{style:{margin:"0 0 10px",fontSize:14,fontWeight:700}},"💾 File Name"),e("div",{style:{display:"flex",alignItems:"center",gap:7}},e("input",{value:opts.fname,onChange:function(ev){setOpts(function(o){return Object.assign({},o,{fname:ev.target.value});});},style:{flex:1,padding:"8px 11px",border:"1.5px solid #e2e8f0",borderRadius:7,fontSize:14,outline:"none",fontFamily:"inherit"},onFocus:function(ev){ev.target.style.borderColor="#2563eb";},onBlur:function(ev){ev.target.style.borderColor="#e2e8f0";}}),e("span",{style:{fontSize:13,color:"#94a3b8",fontWeight:600}},".xlsx")))
+      ),
+      e("div",{style:{position:"sticky",top:20}},
+        e("div",{style:Object.assign({},SRF,{padding:18,marginBottom:10})},
+          e("h3",{style:{margin:"0 0 12px",fontSize:14,fontWeight:700}},"Export"),
+          e(Btn,{variant:"success",size:"lg",loading:exporting,disabled:selCount===0,onClick:doExport,style:{width:"100%",justifyContent:"center",padding:"12px"}},"⬇ Export to Excel"),
+          lastExp&&e("div",{style:{marginTop:8,textAlign:"center",fontSize:12,color:"#10b981"}},"✓ Exported at "+lastExp)
+        )
+      )
+    )
+  );
+}
+
+// ── SETTINGS ───────────────────────────────────────────────────────────────────
+function Settings(p){
+  var _a=useState(""),nd=_a[0],setNd=_a[1];var _b=useState(null),ei=_b[0],setEi=_b[1];var _c=useState(""),ev=_c[0],setEv=_c[1];
+  function doAdd(){var v=nd.trim();if(!v)return;if(p.depts.indexOf(v)>=0)return alert("Already exists");p.setDepts(function(d){return[...d,v];});setNd("");}
+  function doEdit(idx){var v=ev.trim();if(!v)return;if(p.depts.indexOf(v)>=0&&p.depts[idx]!==v)return alert("Already exists");p.setDepts(function(d){return d.map(function(x,i){return i===idx?v:x;});});setEi(null);setEv("");}
+  function doDel(idx){var name=p.depts[idx];if(p.cards.some(function(c){return c.dept===name;}))return alert('Cannot delete "'+name+'" — cards assigned');if(!window.confirm('Delete "'+name+'"?'))return;p.setDepts(function(d){return d.filter(function(_,i){return i!==idx;});});}
+  var usage=useMemo(function(){var m={};p.depts.forEach(function(d){m[d]=p.cards.filter(function(c){return c.dept===d&&c.status==="active";}).length;});return m;},[p.depts,p.cards]);
+  var ta=p.cards.filter(function(c){return c.status==="active";}).length;
+  return e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20},className:"fi"},
+    e("div",{style:Object.assign({},SRF,{padding:20})},e("h3",{style:{margin:"0 0 14px",fontSize:14,fontWeight:700}},"🏢 Departments"),
+      e("div",{style:{display:"flex",gap:8,marginBottom:14}},e("input",{placeholder:"New department...",value:nd,onChange:function(ev){setNd(ev.target.value);},onKeyDown:function(ev){if(ev.key==="Enter")doAdd();},style:{flex:1,padding:"8px 11px",border:"1.5px solid #e2e8f0",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit"}}),e(Btn,{variant:"primary",onClick:doAdd},"+ Add")),
+      e("div",{style:{display:"flex",flexDirection:"column",gap:7}},p.depts.map(function(d,i){return e("div",{key:d,style:{display:"flex",alignItems:"center",gap:7,padding:"9px 13px",background:"#f8fafc",borderRadius:8,border:"1px solid #e2e8f0"}},
+        ei===i?e(React.Fragment,null,e("input",{value:ev,onChange:function(evnt){setEv(evnt.target.value);},autoFocus:true,onKeyDown:function(evnt){if(evnt.key==="Enter")doEdit(i);if(evnt.key==="Escape")setEi(null);},style:{flex:1,padding:"6px 9px",border:"1.5px solid #2563eb",borderRadius:6,fontSize:13,outline:"none",fontFamily:"inherit"}}),e(Btn,{size:"sm",variant:"success",onClick:function(){doEdit(i);}},"✓"),e(Btn,{size:"sm",variant:"ghost",onClick:function(){setEi(null);}},"✕")):
+        e(React.Fragment,null,e("span",{style:{flex:1,fontWeight:600,fontSize:13}},d),e("span",{style:{fontSize:11,color:"#64748b",background:"#e2e8f0",padding:"2px 7px",borderRadius:10}},(usage[d]||0)+" active"),e("button",{onClick:function(){setEi(i);setEv(d);},style:{border:"none",background:"none",cursor:"pointer",fontSize:13,padding:3}},"✏"),e("button",{onClick:function(){doDel(i);},style:{border:"none",background:"none",cursor:"pointer",fontSize:13,padding:3,opacity:(usage[d]>0)?0.3:1}},"🗑"))
+      );}))
+    ),
+    e("div",{style:Object.assign({},SRF,{padding:20})},e("h3",{style:{margin:"0 0 14px",fontSize:14,fontWeight:700}},"📊 Active by Dept"),
+      ta===0?e("p",{style:{color:"#94a3b8",fontSize:13}},"No active cards"):p.depts.map(function(d){var cnt=usage[d]||0,pct=ta>0?Math.round((cnt/ta)*100):0;return e("div",{key:d,style:{marginBottom:13}},e("div",{style:{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}},e("span",{style:{fontWeight:600}},d),e("span",{style:{color:"#64748b"}},cnt+" · "+pct+"%")),e("div",{style:{background:"#f1f5f9",borderRadius:5,height:8,overflow:"hidden"}},e("div",{style:{background:pct>0?"#2563eb":"transparent",width:pct+"%",height:"100%",borderRadius:5,transition:"width .4s ease"}})));}))
+  );
+}
+
+// ── ROOT APP ───────────────────────────────────────────────────────────────────
+function App(){
+  var _a=useState("dashboard"),tab=_a[0],setTab=_a[1];
+  var _b=useState(null),presel=_b[0],setPresel=_b[1];
+  var d=useData();
+  window._setTab=setTab;
+
+  useEffect(function(){
+    var ready=initSupabase();
+    if(!ready){
+      // Demo mode — no Supabase config
+      document.getElementById("login-screen").classList.add("hidden");
+      return;
+    }
+
+    // Check existing session
+    sbGetSession().then(function(session){
+      if(session&&session.user){
+        document.getElementById("login-screen").classList.add("hidden");
+        d.connect(session.user.email||"User");
+      }
+    }).catch(function(){});
+
+    // Login button
+    document.getElementById("btn-login").addEventListener("click",async function(){
+      var email=document.getElementById("inp-email").value.trim();
+      var password=document.getElementById("inp-password").value;
+      var errEl=document.getElementById("login-err");
+      var statusEl=document.getElementById("login-status");
+      errEl.style.display="none";
+      if(!email||!password){
+        errEl.textContent="Please enter email and password";
+        errEl.style.display="block";
+        return;
+      }
+      var btn=document.getElementById("btn-login");
+      btn.disabled=true;btn.textContent="Signing in...";
+      statusEl.textContent="Authenticating...";
+      var result=await sbLogin(email,password);
+      if(result.error){
+        errEl.textContent=result.error.message||"Login failed — check email and password";
+        errEl.style.display="block";
+        btn.disabled=false;btn.textContent="Sign In";
+        statusEl.textContent="";
+      } else {
+        document.getElementById("login-screen").classList.add("hidden");
+        d.connect(result.data.user.email||"User");
+      }
+    });
+
+    // Enter key on password field
+    document.getElementById("inp-password").addEventListener("keydown",function(ev){
+      if(ev.key==="Enter") document.getElementById("btn-login").click();
+    });
+  },[]);
+
+  var TABS=[
+    {k:"dashboard",icon:"📊",label:"Dashboard"},
+    {k:"cards",icon:"🪪",label:"All Cards"},
+    {k:"assign",icon:"👤",label:"Assign / Return"},
+    {k:"history",icon:"📅",label:"Return History"},
+    {k:"log",icon:"🔍",label:"Audit Log"},
+    {k:"import",icon:"📥",label:"Import Excel"},
+    {k:"export",icon:"📤",label:"Export Excel"},
+    {k:"settings",icon:"⚙",label:"Departments"}
+  ];
+
+  var tabContent=null;
+  var dp={cards:d.cards,hist:d.hist,alog:d.alog,depts:d.depts,setCards:d.setCards,setHist:d.setHist,setDepts:d.setDepts,addLog:d.addLog};
+  if(tab==="dashboard") tabContent=e(Dashboard,dp);
+  else if(tab==="cards") tabContent=e(AllCards,Object.assign({},dp,{openAssign:function(c){setPresel(c);setTab("assign");}}));
+  else if(tab==="assign") tabContent=e(AssignReturn,Object.assign({},dp,{preselect:presel,clearPreselect:function(){setPresel(null);}}));
+  else if(tab==="history") tabContent=e(HistoryTab,dp);
+  else if(tab==="log") tabContent=e(AuditLog,dp);
+  else if(tab==="import") tabContent=e(ImportTab,dp);
+  else if(tab==="export") tabContent=e(ExportTab,dp);
+  else if(tab==="settings") tabContent=e(Settings,dp);
+
+  return e("div",{style:{minHeight:"100vh",display:"flex",flexDirection:"column"}},
+    // Header
+    e("div",{style:{background:"#fff",borderBottom:"1px solid #e2e8f0",padding:"0 24px",display:"flex",alignItems:"center",gap:16,height:56,position:"sticky",top:0,zIndex:100}},
+      e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+        e("div",{style:{width:34,height:34,background:"#2563eb",borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17}},"🪪"),
+        e("div",null,
+          e("div",{style:{fontSize:15,fontWeight:700,color:"#0f172a",lineHeight:1.2}},"Access Card"),
+          e("div",{style:{fontSize:11,color:"#94a3b8"}},"HR Automation")
+        )
+      ),
+      e("div",{style:{flex:1}}),
+      e(SyncBadge,{mode:d.mode,error:d.syncErr,syncing:d.syncing,lastSync:d.lastSync}),
+      d.mode==="supabase"&&e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+        e("span",{style:{fontSize:12,color:"#64748b"}},d.cusr),
+        e(Btn,{size:"sm",variant:"ghost",onClick:function(){d.disconnect();document.getElementById("login-screen").classList.remove("hidden");}},"Sign out")
+      )
+    ),
+    // Nav
+    e("div",{style:{background:"#fff",borderBottom:"1px solid #e2e8f0",padding:"0 24px",display:"flex",gap:2,overflowX:"auto"}},
+      TABS.map(function(t){var active=tab===t.k;return e("button",{key:t.k,onClick:function(){setTab(t.k);if(t.k!=="assign")setPresel(null);},style:{padding:"12px 14px",border:"none",borderBottom:"2px solid "+(active?"#2563eb":"transparent"),background:"none",cursor:"pointer",fontSize:13,fontWeight:active?700:500,color:active?"#2563eb":"#64748b",display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap",transition:"color .15s"}},t.icon," ",t.label);})
+    ),
+    // Content
+    e("div",{style:{flex:1,padding:"22px 24px",maxWidth:1400,width:"100%",margin:"0 auto",boxSizing:"border-box"}},
+      tabContent
+    )
+  );
+}
+
+ReactDOM.render(e(App,null), document.getElementById("root"));
+
+})();
+</script>
+</body>
+</html>
